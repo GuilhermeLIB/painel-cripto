@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="dark light">
+    <title>Painel Cripto</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%236E8BFF'/><path d='M8 21l5-6 4 4 7-9' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Sora:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+    <a class="skip" href="#view">Pular para o conteúdo</a>
+    <div class="shell">
+        <nav class="rail" aria-label="Seções">
+            <a class="brand" href="#/mercado" aria-label="Painel Cripto, início">
+                <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9"/><path d="M8 21l5-6 4 4 7-9"/></svg>
+                <span>Painel Cripto</span>
+            </a>
+            <a class="nav-item" data-route="mercado" href="#/mercado">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg><span>Mercado</span>
+            </a>
+            <a class="nav-item" data-route="ativo" href="#/ativo">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8M15 7h6v6"/></svg><span>Análise</span>
+            </a>
+            <a class="nav-item" data-route="carteira" href="#/carteira">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="14" rx="3"/><path d="M3 10h18M16 15h2"/></svg><span>Carteira</span>
+            </a>
+            <a class="nav-item" data-route="alertas" href="#/alertas">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 1112 0v5l2 2H4zM10 21h4"/></svg><span>Alertas</span>
+            </a>
+            <div class="rail-foot">
+                <span class="live"><i id="liveDot" data-status="connecting"></i><span id="liveLabel">Conectando</span></span>
+                <span id="fxRate" class="muted">USDT —</span>
+            </div>
+        </nav>
+
+        <div class="main">
+            <header class="topbar">
+                <button id="searchOpen" class="search-trigger" type="button">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+                    <span>Buscar ou adicionar cripto</span>
+                    <kbd>Ctrl K</kbd>
+                </button>
+                <div class="top-actions">
+                    <div id="currencyToggle" class="seg seg-soft" role="group" aria-label="Moeda dos valores"></div>
+                    <button id="privacyToggle" class="icon-btn icon-btn-lg" type="button" aria-pressed="false" aria-label="Ocultar valores da carteira">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path class="eye" d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle class="eye" cx="12" cy="12" r="3"/><path class="slash" d="M4 4l16 16"/></svg>
+                    </button>
+                    <button id="themeToggle" class="icon-btn icon-btn-lg" type="button" aria-label="Trocar tema">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 7a5 5 0 010 10z" class="half"/></svg>
+                    </button>
+                </div>
+            </header>
+            <main id="view" tabindex="-1"></main>
+            <footer class="foot">Cotações da Binance (pares USDT). Informação, não recomendação de investimento.</footer>
+        </div>
+    </div>
+
+    <dialog id="search" class="dialog dialog-search" aria-labelledby="searchTitle">
+        <h2 id="searchTitle" class="sr-only">Buscar cripto</h2>
+        <div class="search-box">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+            <input id="searchInput" type="text" placeholder="Nome ou símbolo, ex.: SOL, Chainlink" autocomplete="off" spellcheck="false" aria-controls="searchResults">
+            <kbd>Esc</kbd>
+        </div>
+        <ul id="searchResults" class="search-results" role="listbox"></ul>
+    </dialog>
+
+    <dialog id="txDialog" class="dialog" aria-labelledby="txTitle">
+        <form id="txForm" class="dialog-body" novalidate>
+            <h2 id="txTitle">Nova operação</h2>
+            <div id="txType" class="seg seg-wide" role="group" aria-label="Tipo">
+                <button type="button" data-type="buy" aria-pressed="true">Compra</button>
+                <button type="button" data-type="sell" aria-pressed="false">Venda</button>
+            </div>
+            <div class="form-row">
+                <label>Cripto<select id="txAsset" class="input"></select></label>
+                <label>Data<input id="txDate" class="input" type="date"></label>
+            </div>
+            <div id="txMode" class="seg seg-soft" role="group" aria-label="Como informar o valor">
+                <button type="button" data-mode="brl" aria-pressed="true">Em reais</button>
+                <button type="button" data-mode="usd" aria-pressed="false">Em dólar</button>
+                <button type="button" data-mode="qty" aria-pressed="false">Quantidade</button>
+            </div>
+            <div class="form-row">
+                <label><span id="txAmountLabel">Valor pago em R$</span><input id="txAmount" class="input" type="text" inputmode="decimal" autocomplete="off"></label>
+                <label>Preço por moeda (US$)<input id="txPrice" class="input" type="text" inputmode="decimal" autocomplete="off"></label>
+            </div>
+            <p id="txPriceHint" class="footnote"></p>
+            <div class="form-row">
+                <label>Taxa da corretora (US$, opcional)<input id="txFee" class="input" type="text" inputmode="decimal" autocomplete="off"></label>
+                <label>Nota (opcional)<input id="txNote" class="input" type="text" maxlength="200" autocomplete="off"></label>
+            </div>
+            <p id="txPreview" class="tx-preview"></p>
+            <p id="txMsg" class="form-error" role="alert"></p>
+            <div class="dialog-actions">
+                <button id="txCancel" class="btn btn-ghost" type="button">Cancelar</button>
+                <button id="txSave" class="btn btn-primary" type="submit">Registrar operação</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="planDialog" class="dialog" aria-labelledby="planTitle">
+        <form id="planForm" class="dialog-body" novalidate>
+            <h2 id="planTitle">Plano de aportes</h2>
+            <div class="form-row">
+                <label>Valor de cada aporte (R$)<input id="planBudget" class="input" type="number" min="1" step="1"></label>
+                <label>Frequência<select id="planFreq" class="input"><option value="weekly">Semanal</option><option value="monthly">Mensal</option></select></label>
+                <label id="planWeekdayWrap">Dia da semana<select id="planWeekday" class="input">
+                    <option value="0">Domingo</option><option value="1">Segunda</option><option value="2">Terça</option><option value="3">Quarta</option><option value="4">Quinta</option><option value="5">Sexta</option><option value="6">Sábado</option>
+                </select></label>
+                <label id="planMonthDayWrap" hidden>Dia do mês<input id="planMonthDay" class="input" type="number" min="1" max="28"></label>
+            </div>
+            <div class="panel-bar">
+                <h3>Divisão desejada</h3>
+                <button id="planEqual" class="btn btn-small btn-ghost" type="button">Dividir igualmente</button>
+            </div>
+            <p class="footnote">Deixe em branco as criptos que não entram no plano. A sugestão de cada aporte prioriza as que estão abaixo do alvo.</p>
+            <ul id="planTargets" class="target-list"></ul>
+            <p id="planSum" class="plan-sum"></p>
+            <div class="dialog-actions">
+                <button id="planCancel" class="btn btn-ghost" type="button">Cancelar</button>
+                <button class="btn btn-primary" type="submit">Salvar plano</button>
+            </div>
+        </form>
+    </dialog>
+
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="js/util.js"></script>
+    <script src="js/coins.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/store.js"></script>
+    <script src="js/indicators.js"></script>
+    <script src="js/charts.js"></script>
+    <script src="js/views/market.js"></script>
+    <script src="js/views/asset.js"></script>
+    <script src="js/views/portfolio.js"></script>
+    <script src="js/views/alerts.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
