@@ -5,16 +5,25 @@ window.App = window.App || {};
     const KEY = 'cripto-dash:v1';
     const { uid, isIsoDate, bus } = App.util;
 
+    const SMART_TABS = ['smart:portfolio', 'smart:discount', 'smart:alerts'];
+    const LIST_COLORS = ['#6E8BFF', '#2FD5A0', '#E7B45A', '#FF6F61', '#4FB8D6', '#C77DFF', '#FF9F43', '#9AA3B5'];
+
     const defaults = () => ({
-        version: 1,
+        version: 2,
         settings: {
             theme: 'auto',
             currency: 'BRL',
             privacy: false,
             timeframe: '1d',
             indicators: { sma: true, bb: false, volume: true },
+            marketPeriod: '30d',
+            marketView: 'table',
+            heatSize: 'volume',
         },
-        watchlist: [...App.coins.DEFAULT_WATCHLIST],
+        lists: [{ id: 'obs', name: 'Observando', color: LIST_COLORS[0], symbols: [...App.coins.DEFAULT_WATCHLIST] }],
+        tabs: ['obs', ...SMART_TABS],
+        favoriteTab: 'obs',
+        notes: {},
         transactions: [],
         plan: {
             budgetBrl: 500,
@@ -38,7 +47,8 @@ window.App = window.App || {};
                 ...parsed,
                 settings: { ...base.settings, ...parsed.settings, indicators: { ...base.settings.indicators, ...parsed.settings?.indicators } },
                 plan: { ...base.plan, ...parsed.plan, targets: { ...parsed.plan?.targets } },
-                watchlist: Array.isArray(parsed.watchlist) && parsed.watchlist.length ? parsed.watchlist : base.watchlist,
+                ...migrateLists(parsed, base),
+                notes: parsed.notes && typeof parsed.notes === 'object' ? parsed.notes : {},
                 transactions: Array.isArray(parsed.transactions) ? parsed.transactions.filter(isValidTx).map(normalizeTx) : [],
                 alerts: Array.isArray(parsed.alerts) ? parsed.alerts : [],
             };
@@ -48,7 +58,27 @@ window.App = window.App || {};
         }
     }
 
+    // Versão 1 tinha uma única lista ("watchlist"); ela vira a lista "Observando".
+    function migrateLists(parsed, base) {
+        let lists = Array.isArray(parsed.lists) ? parsed.lists.filter((l) => l && l.id && Array.isArray(l.symbols)) : null;
+        if (!lists || !lists.length) {
+            const symbols = Array.isArray(parsed.watchlist) && parsed.watchlist.length ? parsed.watchlist : base.lists[0].symbols;
+            lists = [{ ...base.lists[0], symbols: [...symbols] }];
+        }
+        const ids = new Set([...lists.map((l) => l.id), ...SMART_TABS]);
+        let tabs = Array.isArray(parsed.tabs) ? parsed.tabs.filter((t) => ids.has(t)) : [];
+        [...lists.map((l) => l.id), ...SMART_TABS].forEach((id) => { if (!tabs.includes(id)) tabs.push(id); });
+        const favoriteTab = tabs.includes(parsed.favoriteTab) ? parsed.favoriteTab : tabs[0];
+        return { lists, tabs, favoriteTab };
+    }
+
     const state = load();
+    delete state.watchlist;
+    // "watchlist" passa a ser a união das listas manuais (só leitura, não é salva).
+    Object.defineProperty(state, 'watchlist', {
+        enumerable: false,
+        get() { return [...new Set(state.lists.flatMap((l) => l.symbols))]; },
+    });
     let saveTimer = null;
 
     function save() {
@@ -105,7 +135,6 @@ window.App = window.App || {};
         const index = state.transactions.findIndex((t) => t.id === record.id);
         if (index >= 0) state.transactions[index] = record;
         else state.transactions.push(record);
-        ensureWatched(record.asset);
         commit('transactions');
         return record;
     }
@@ -148,38 +177,100 @@ window.App = window.App || {};
         }));
     }
 
-    // ---- Lista de acompanhamento ----
-    function ensureWatched(symbol) {
-        if (!state.watchlist.includes(symbol)) {
-            state.watchlist.push(symbol);
-            bus.emit('watchlist', state.watchlist);
-        }
+    // ---- Listas ----
+    function getList(id) {
+        return state.lists.find((l) => l.id === id) ?? null;
     }
 
-    function addWatch(symbol) {
-        if (state.watchlist.includes(symbol)) return false;
-        state.watchlist.push(symbol);
-        commit('watchlist');
+    function listsChanged() {
+        commit('lists');
+        bus.emit('watchlist', state.watchlist);
+    }
+
+    function createList(name, color) {
+        const id = `l${uid()}`;
+        state.lists.push({ id, name: name.trim().slice(0, 40) || 'Nova lista', color: color || LIST_COLORS[state.lists.length % LIST_COLORS.length], symbols: [] });
+        state.tabs.splice(state.lists.length - 1, 0, id);
+        listsChanged();
+        return id;
+    }
+
+    function updateList(id, patch) {
+        const list = getList(id);
+        if (!list) return;
+        if (patch.name !== undefined) list.name = patch.name.trim().slice(0, 40) || list.name;
+        if (patch.color) list.color = patch.color;
+        listsChanged();
+    }
+
+    function deleteList(id) {
+        if (state.lists.length <= 1) return false;
+        state.lists = state.lists.filter((l) => l.id !== id);
+        state.tabs = state.tabs.filter((t) => t !== id);
+        if (state.favoriteTab === id) state.favoriteTab = state.tabs[0];
+        listsChanged();
         return true;
     }
 
-    function removeWatch(symbol) {
-        state.watchlist = state.watchlist.filter((s) => s !== symbol);
-        commit('watchlist');
+    function setFavorite(tabId) {
+        state.favoriteTab = tabId;
+        listsChanged();
     }
 
-    function moveWatch(symbol, delta) {
-        const i = state.watchlist.indexOf(symbol);
-        const j = i + delta;
-        if (i < 0 || j < 0 || j >= state.watchlist.length) return;
-        [state.watchlist[i], state.watchlist[j]] = [state.watchlist[j], state.watchlist[i]];
-        commit('watchlist');
+    function moveTab(id, toIndex) {
+        const from = state.tabs.indexOf(id);
+        if (from < 0) return;
+        state.tabs.splice(from, 1);
+        state.tabs.splice(Math.max(0, Math.min(state.tabs.length, toIndex)), 0, id);
+        listsChanged();
+    }
+
+    function addToList(listId, symbol) {
+        const list = getList(listId);
+        if (!list || list.symbols.includes(symbol)) return false;
+        list.symbols.push(symbol);
+        listsChanged();
+        return true;
+    }
+
+    function removeFromList(listId, symbol) {
+        const list = getList(listId);
+        if (!list) return;
+        list.symbols = list.symbols.filter((s) => s !== symbol);
+        listsChanged();
+    }
+
+    function moveInList(listId, symbol, toIndex) {
+        const list = getList(listId);
+        if (!list) return;
+        const from = list.symbols.indexOf(symbol);
+        if (from < 0) return;
+        list.symbols.splice(from, 1);
+        list.symbols.splice(Math.max(0, Math.min(list.symbols.length, toIndex)), 0, symbol);
+        listsChanged();
+    }
+
+    function listsOf(symbol) {
+        return state.lists.filter((l) => l.symbols.includes(symbol)).map((l) => l.id);
+    }
+
+    // Compatibilidade: adiciona na lista favorita (ou na primeira manual).
+    function addWatch(symbol) {
+        const target = getList(state.favoriteTab) ?? state.lists[0];
+        return addToList(target.id, symbol);
+    }
+
+    // ---- Anotações por cripto: preço que quero pagar e nota ----
+    function setNote(symbol, { note, buyPrice }) {
+        const clean = { note: String(note ?? '').trim().slice(0, 300), buyPrice: Number(buyPrice) > 0 ? Number(buyPrice) : null };
+        if (!clean.note && !clean.buyPrice) delete state.notes[symbol];
+        else state.notes[symbol] = { ...clean, updatedAt: Date.now() };
+        commit('notes');
     }
 
     // ---- Alertas ----
     function addAlert(alert) {
         state.alerts.push({ id: uid(), createdAt: Date.now(), triggeredAt: null, ...alert });
-        ensureWatched(alert.asset);
         commit('alerts');
     }
 
@@ -190,7 +281,7 @@ window.App = window.App || {};
 
     // ---- Backup ----
     function exportData() {
-        return JSON.stringify({ app: 'cripto-dashboard', exportedAt: new Date().toISOString(), ...state }, null, 2);
+        return JSON.stringify({ app: 'cripto-dashboard', exportedAt: new Date().toISOString(), ...state, watchlist: state.watchlist }, null, 2);
     }
 
     // Aceita o backup deste app e o do dashboard antigo de Bitcoin (lista "contributions").
@@ -239,7 +330,8 @@ window.App = window.App || {};
             const base = defaults();
             const p = result.payload;
             state.settings = { ...base.settings, ...p.settings };
-            state.watchlist = Array.isArray(p.watchlist) && p.watchlist.length ? p.watchlist : base.watchlist;
+            Object.assign(state, migrateLists(p, base));
+            state.notes = p.notes && typeof p.notes === 'object' ? p.notes : {};
             state.plan = { ...base.plan, ...p.plan, targets: { ...p.plan?.targets } };
             state.alerts = Array.isArray(p.alerts) ? p.alerts : [];
             state.transactions = result.txs;
@@ -247,11 +339,10 @@ window.App = window.App || {};
             const known = new Set(state.transactions.map((t) => t.id));
             result.txs.forEach((tx) => {
                 if (!known.has(tx.id)) state.transactions.push(tx);
-                ensureWatched(tx.asset);
             });
         }
-        result.txs.forEach((tx) => ensureWatched(tx.asset));
         commit('transactions');
+        bus.emit('lists', state);
     }
 
     function legacyLocalData() {
@@ -267,7 +358,9 @@ window.App = window.App || {};
     App.store = {
         state, save, commit,
         upsertTx, removeTx, positions,
-        addWatch, removeWatch, moveWatch,
+        getList, createList, updateList, deleteList, setFavorite, moveTab,
+        addToList, removeFromList, moveInList, listsOf, addWatch, setNote,
+        SMART_TABS, LIST_COLORS,
         addAlert, removeAlert,
         exportData, parseImport, applyImport, legacyToTx, legacyLocalData,
     };

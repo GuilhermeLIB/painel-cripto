@@ -157,11 +157,15 @@ window.App = window.App || {};
 
     // ---------- Busca (Ctrl+K) ----------
     let searchIndex = [];
-    async function openSearch(mode = 'open') {
+    // mode "open": abre a análise. mode "add": adiciona à lista listId (padrão: a favorita).
+    async function openSearch(mode = 'open', listId = null) {
         const dialog = $('#search');
         const input = $('#searchInput');
         dialog.dataset.mode = mode;
-        $('#searchTitle').textContent = mode === 'add' ? 'Adicionar à lista' : 'Buscar cripto';
+        dialog.dataset.list = listId || (store.getList(S.favoriteTab) ?? S.lists[0]).id;
+        const target = store.getList(dialog.dataset.list);
+        $('#searchTitle').textContent = mode === 'add' ? `Adicionar a ${target?.name ?? 'lista'}` : 'Buscar cripto';
+        input.placeholder = mode === 'add' ? `Adicionar a “${target?.name ?? 'lista'}”: nome ou símbolo` : 'Nome ou símbolo, ex.: SOL, Chainlink';
         dialog.showModal();
         input.value = '';
         renderSearch('');
@@ -194,12 +198,14 @@ window.App = window.App || {};
         }
         list.innerHTML = items.map((c, i) => {
             const m = App.coins.meta(c.symbol);
-            const watched = S.watchlist.includes(c.symbol);
+            const dlg = $('#search');
+            const inTarget = store.getList(dlg.dataset.list)?.symbols.includes(c.symbol);
+            const tag = dlg.dataset.mode === 'add' ? (inTarget ? 'Já está' : 'Adicionar') : 'Abrir';
             return html`<li role="option" class="search-item${i === 0 ? ' is-focus' : ''}" data-symbol="${c.symbol}" aria-selected="${i === 0}">
                 ${raw(App.coins.avatar(c.symbol, 28))}
                 <span class="search-name"><strong>${c.symbol}</strong><span>${m.name !== c.symbol ? m.name : 'Par USDT'}</span></span>
                 <span class="search-price">${fmt.money(c.price)}</span>
-                <span class="search-tag">${watched ? 'Na lista' : 'Adicionar'}</span>
+                <span class="search-tag">${tag}</span>
             </li>`;
         }).join('');
     }
@@ -208,12 +214,17 @@ window.App = window.App || {};
         const dialog = $('#search');
         const mode = dialog.dataset.mode;
         dialog.close();
-        const added = store.addWatch(symbol);
-        if (added) {
-            toast(`${symbol} adicionada à sua lista.`, 'info');
-            App.refreshPrices();
+        if (mode === 'add') {
+            const list = store.getList(dialog.dataset.list);
+            if (list && store.addToList(list.id, symbol)) {
+                toast(`${symbol} adicionada a “${list.name}”.`, 'info');
+                App.refreshPrices();
+            } else if (list) {
+                toast(`${symbol} já está em “${list.name}”.`);
+            }
+            return;
         }
-        if (mode !== 'add') App.go(`#/ativo/${symbol}`);
+        App.go(`#/ativo/${symbol}`);
     }
     App.openSearch = openSearch;
 
@@ -298,14 +309,112 @@ window.App = window.App || {};
         bus.on('prices', renderFx);
     }
 
+    // ---------- Anotações (preço desejado e nota) ----------
+    function parseNum(value) {
+        let text = String(value ?? '').replace(/\s/g, '');
+        if (text.includes(',')) text = text.replace(/\./g, '').replace(',', '.');
+        const n = Number(text);
+        return text && Number.isFinite(n) ? n : NaN;
+    }
+    App.parseNum = parseNum;
+
+    App.openNote = (symbol) => {
+        const dlg = $('#noteDialog');
+        const note = S.notes[symbol] ?? {};
+        dlg.dataset.symbol = symbol;
+        $('#noteTitle').textContent = `Anotações de ${symbol}`;
+        const price = App.priceOf(symbol);
+        $('#noteNow').textContent = price ? `Preço agora: ${fmt.money(price)}` : '';
+        $('#noteBuy').value = note.buyPrice ?? '';
+        $('#noteText').value = note.note ?? '';
+        $('#noteAlert').checked = false;
+        dlg.showModal();
+        $('#noteBuy').focus();
+    };
+
+    function wireNoteDialog() {
+        const dlg = $('#noteDialog');
+        $('#noteCancel').addEventListener('click', () => dlg.close());
+        $('#noteClear').addEventListener('click', () => {
+            store.setNote(dlg.dataset.symbol, {});
+            dlg.close();
+            toast('Anotações apagadas.');
+        });
+        $('#noteForm').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const symbol = dlg.dataset.symbol;
+            const rawBuy = $('#noteBuy').value.trim();
+            const buy = rawBuy ? parseNum(rawBuy) : null;
+            if (rawBuy && !(buy > 0)) {
+                toast('O preço desejado precisa ser um número maior que zero.', 'bad');
+                return;
+            }
+            store.setNote(symbol, { note: $('#noteText').value, buyPrice: buy });
+            if ($('#noteAlert').checked && buy > 0) {
+                const now = App.priceOf(symbol);
+                store.addAlert({ asset: symbol, condition: now && buy > now ? 'above' : 'below', price: buy });
+                App.askNotifications();
+            }
+            dlg.close();
+            toast(`Anotações de ${symbol} salvas.`, 'up');
+        });
+    }
+
+    // ---------- Criar / editar lista ----------
+    App.openListDialog = (listId = null, onCreate = null) => {
+        const dlg = $('#listDialog');
+        const list = listId ? store.getList(listId) : null;
+        dlg.dataset.list = list?.id ?? '';
+        dlg._onCreate = onCreate;
+        $('#listTitle').textContent = list ? 'Editar lista' : 'Nova lista';
+        $('#listSave').textContent = list ? 'Salvar' : 'Criar lista';
+        $('#listName').value = list?.name ?? '';
+        $('#listDelete').hidden = !list || S.lists.length <= 1;
+        const current = list?.color ?? store.LIST_COLORS[S.lists.length % store.LIST_COLORS.length];
+        $('#listColors').innerHTML = store.LIST_COLORS.map((c) => html`<label class="swatch" style="--c:${c}"><input type="radio" name="listColor" value="${c}" ${c === current ? 'checked' : ''}><span class="sr-only">${c}</span></label>`).join('');
+        dlg.showModal();
+        $('#listName').focus();
+    };
+
+    function wireListDialog() {
+        const dlg = $('#listDialog');
+        $('#listCancel').addEventListener('click', () => dlg.close());
+        $('#listDelete').addEventListener('click', () => {
+            const list = store.getList(dlg.dataset.list);
+            if (!list) return;
+            if (!window.confirm(`Apagar a lista “${list.name}”? As criptos continuam nas outras listas e na carteira.`)) return;
+            store.deleteList(list.id);
+            dlg.close();
+            toast(`Lista “${list.name}” apagada.`);
+        });
+        $('#listForm').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const name = $('#listName').value.trim();
+            if (!name) { toast('Dê um nome para a lista.', 'bad'); return; }
+            const color = $('#listColors input:checked')?.value;
+            if (dlg.dataset.list) {
+                store.updateList(dlg.dataset.list, { name, color });
+                toast('Lista atualizada.');
+            } else {
+                const id = store.createList(name, color);
+                toast(`Lista “${name}” criada.`, 'up');
+                dlg._onCreate?.(id);
+            }
+            dlg.close();
+        });
+    }
+
     // ---------- Início ----------
     function init() {
         applyTheme();
         renderTopbar();
         wireTopbar();
         wireSearch();
+        wireNoteDialog();
+        wireListDialog();
         window.addEventListener('hashchange', route);
         bus.on('watchlist', () => App.refreshPrices());
+        bus.on('notes', () => App.refreshPrices());
         bus.on('transactions', () => App.refreshPrices());
         bus.on('alerts', () => App.refreshPrices());
         refreshPrices();

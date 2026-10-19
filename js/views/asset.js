@@ -203,10 +203,10 @@ App.views = App.views || {};
         $('#heroPriceAlt', root).textContent = p && App.live.fx ? (S.settings.currency === 'BRL' ? fmt.money(p.price * App.live.fx, 'BRL') : '') : '';
         $('#heroChange', root).innerHTML = p ? html`<span class="delta delta-${tone}">${fmt.pct(p.changePct)}</span> <span class="muted">em 24h</span>` : '';
         $('#heroRange', root).innerHTML = p ? html`<span class="muted">Mín.</span> ${fmt.money(p.low)} <span class="muted">Máx.</span> ${fmt.money(p.high)} <span class="muted">Vol.</span> ${App.money(p.quoteVolume, { compact: true })}` : '';
-        const watched = S.watchlist.includes(symbol);
+        const inLists = store.listsOf(symbol);
         const btn = $('#watchToggle', root);
-        btn.textContent = watched ? 'Na sua lista' : 'Adicionar à lista';
-        btn.setAttribute('aria-pressed', watched);
+        btn.textContent = inLists.length ? (inLists.length === 1 ? `Em “${store.getList(inLists[0]).name}”` : `Em ${inLists.length} listas`) : 'Adicionar a uma lista';
+        btn.setAttribute('aria-pressed', inLists.length > 0);
         document.documentElement.style.setProperty('--accent', m.color);
         renderPosition();
     }
@@ -271,6 +271,28 @@ App.views = App.views || {};
         }
     }
 
+    function renderListPop() {
+        const inLists = store.listsOf(symbol);
+        $('#listPop', root).innerHTML = html`<p class="pop-title">Listas de ${symbol}</p>
+            ${raw(S.lists.map((l) => html`<label class="pop-item"><input type="checkbox" data-list="${l.id}" ${inLists.includes(l.id) ? 'checked' : ''}><i style="background:${l.color}"></i>${l.name}</label>`).join(''))}
+            <button class="btn btn-small btn-ghost" type="button" data-act="new-list">Nova lista…</button>`;
+    }
+
+    function renderNote() {
+        const el = $('#noteCard', root);
+        if (!el) return;
+        const n = S.notes[symbol];
+        const price = App.priceOf(symbol);
+        if (!n) {
+            el.innerHTML = html`<p class="muted">Anote o preço que você quer pagar e por que está de olho em ${symbol}.</p>`;
+            return;
+        }
+        const gap = n.buyPrice && price ? ((n.buyPrice - price) / price) * 100 : null;
+        el.innerHTML = html`
+            ${raw(n.buyPrice ? html`<p class="note-target"><span class="muted">Quero pagar</span> <strong>${fmt.money(n.buyPrice)}</strong> ${raw(gap === null ? '' : gap >= 0 ? '<span class="chip chip-up">No alvo</span>' : html`<span class="muted">precisa cair ${fmt.pct(-gap, 1).replace('+', '')}</span>`)}</p>` : '')}
+            ${raw(n.note ? html`<p class="note-text">${n.note}</p>` : '')}`;
+    }
+
     function renderAlerts() {
         const list = S.alerts.filter((a) => a.asset === symbol);
         const el = $('#assetAlerts', root);
@@ -297,11 +319,32 @@ App.views = App.views || {};
             store.save();
             fillCharts();
         });
-        $('#watchToggle', root).addEventListener('click', () => {
-            if (S.watchlist.includes(symbol)) store.removeWatch(symbol);
-            else store.addWatch(symbol);
+        $('#watchToggle', root).addEventListener('click', (event) => {
+            event.stopPropagation();
+            const pop = $('#listPop', root);
+            if (!pop.hidden) { pop.hidden = true; return; }
+            renderListPop();
+            pop.hidden = false;
+            $('input', pop)?.focus();
+        });
+        $('#listPop', root).addEventListener('change', (event) => {
+            const box = event.target.closest('input[data-list]');
+            if (!box) return;
+            if (box.checked) store.addToList(box.dataset.list, symbol);
+            else store.removeFromList(box.dataset.list, symbol);
             renderHero();
         });
+        $('#listPop', root).addEventListener('click', (event) => {
+            event.stopPropagation();
+            if (event.target.closest('[data-act="new-list"]')) {
+                $('#listPop', root).hidden = true;
+                App.openListDialog(null, (id) => { store.addToList(id, symbol); renderHero(); });
+            }
+        });
+        const closePop = () => { const pop = root && $('#listPop', root); if (pop) pop.hidden = true; };
+        document.addEventListener('click', closePop);
+        offs.push(() => document.removeEventListener('click', closePop));
+        $('#noteEdit', root).addEventListener('click', () => App.openNote(symbol));
         $('#alertForm', root).addEventListener('submit', (event) => {
             event.preventDefault();
             const price = Number($('#alertPrice', root).value.replace(',', '.'));
@@ -351,7 +394,10 @@ App.views = App.views || {};
                         <p id="heroChange"></p>
                     </div>
                     <div class="asset-actions">
-                        <button id="watchToggle" class="btn" type="button" aria-pressed="false">Adicionar à lista</button>
+                        <div class="pop-wrap">
+                            <button id="watchToggle" class="btn" type="button" aria-pressed="false" aria-haspopup="true">Adicionar a uma lista</button>
+                            <div id="listPop" class="popover" hidden></div>
+                        </div>
                         <a class="btn btn-primary" href="#/carteira/novo/${symbol}">Registrar aporte</a>
                     </div>
                     <p id="heroRange" class="asset-range"></p>
@@ -396,6 +442,10 @@ App.views = App.views || {};
                             <div id="positionCard"></div>
                         </section>
                         <section class="panel">
+                            <div class="panel-bar"><h2 class="panel-title">Anotações</h2><button id="noteEdit" class="btn btn-small" type="button">Editar</button></div>
+                            <div id="noteCard"></div>
+                        </section>
+                        <section class="panel">
                             <h2 class="panel-title">Alertas de preço</h2>
                             <form id="alertForm" class="inline-form">
                                 <label class="sr-only" for="alertPrice">Preço do alerta em US$</label>
@@ -411,15 +461,18 @@ App.views = App.views || {};
             wire();
             renderHero();
             renderAlerts();
+            renderNote();
             loadChart();
             renderSignal();
-            offs = [
-                bus.on('prices', renderHero),
+            offs.push(
+                bus.on('prices', () => { renderHero(); renderNote(); }),
+                bus.on('notes', renderNote),
+                bus.on('lists', renderHero),
                 bus.on('settings', renderHero),
                 bus.on('transactions', renderPosition),
                 bus.on('alerts', renderAlerts),
                 bus.on('theme', () => { buildCharts(); fillCharts(); }),
-            ];
+            );
         },
         unmount() {
             offs.forEach((off) => off());

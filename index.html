@@ -128,6 +128,39 @@
         </form>
     </dialog>
 
+    <dialog id="noteDialog" class="dialog" aria-labelledby="noteTitle">
+        <form id="noteForm" class="dialog-body" novalidate>
+            <h2 id="noteTitle">Anotações</h2>
+            <p id="noteNow" class="footnote"></p>
+            <label>Preço que quero pagar (US$)<input id="noteBuy" class="input" type="text" inputmode="decimal" autocomplete="off" placeholder="Opcional"></label>
+            <label>Nota<textarea id="noteText" class="input" rows="3" maxlength="300" placeholder="Por que estou de olho, tese, lembretes…"></textarea></label>
+            <label class="switch"><input type="checkbox" id="noteAlert"><span>Criar alerta quando chegar nesse preço</span></label>
+            <div class="dialog-actions">
+                <button id="noteClear" class="btn btn-ghost" type="button">Limpar</button>
+                <span class="spacer"></span>
+                <button id="noteCancel" class="btn btn-ghost" type="button">Cancelar</button>
+                <button class="btn btn-primary" type="submit">Salvar</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="listDialog" class="dialog dialog-small" aria-labelledby="listTitle">
+        <form id="listForm" class="dialog-body" novalidate>
+            <h2 id="listTitle">Nova lista</h2>
+            <label>Nome<input id="listName" class="input" maxlength="40" autocomplete="off" placeholder="Ex.: Já aportando, Altcoins, Curto prazo"></label>
+            <fieldset class="color-pick">
+                <legend>Cor</legend>
+                <div id="listColors"></div>
+            </fieldset>
+            <div class="dialog-actions">
+                <button id="listDelete" class="btn btn-ghost btn-danger" type="button">Apagar lista</button>
+                <span class="spacer"></span>
+                <button id="listCancel" class="btn btn-ghost" type="button">Cancelar</button>
+                <button id="listSave" class="btn btn-primary" type="submit">Criar lista</button>
+            </div>
+        </form>
+    </dialog>
+
     <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
     <script src="js/util.js"></script>
     <script src="js/coins.js"></script>
