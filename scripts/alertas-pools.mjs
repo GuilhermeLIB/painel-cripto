@@ -6,7 +6,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const env = process.env;
-const WALLETS = (env.WALLETS || '').split(/[\s,;]+/).map((w) => w.trim()).filter(Boolean);
+const ALL_WALLETS = (env.WALLETS || '').split(/[\s,;]+/).map((w) => w.trim()).filter(Boolean);
+// Por enquanto só redes compatíveis com Ethereum (0x…). Endereços Solana são reconhecidos e
+// pulados com aviso, sem derrubar a verificação das outras carteiras.
+const isEvm = (w) => /^0x[0-9a-fA-F]{40}$/.test(w);
+const isSolana = (w) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w);
+const WALLETS = ALL_WALLETS.filter(isEvm);
+const SOLANA = ALL_WALLETS.filter((w) => !isEvm(w) && isSolana(w));
+const INVALID = ALL_WALLETS.filter((w) => !isEvm(w) && !isSolana(w));
 const TOKEN = env.TELEGRAM_BOT_TOKEN;
 const CHAT = env.TELEGRAM_CHAT_ID;
 const TG_API = env.TELEGRAM_API || 'https://api.telegram.org';
@@ -146,9 +153,8 @@ function saveState(state) {
 }
 
 async function main() {
-    if (!WALLETS.length) throw new Error('Configure o segredo WALLETS com os endereços (separados por vírgula).');
-    const bad = WALLETS.filter((w) => !/^0x[0-9a-fA-F]{40}$/.test(w));
-    if (bad.length) throw new Error(`Endereço(s) inválido(s) em WALLETS: ${bad.join(', ')}`);
+    if (!ALL_WALLETS.length) throw new Error('Configure o segredo WALLETS com os endereços (separados por vírgula).');
+    if (!WALLETS.length && !SOLANA.length) throw new Error(`Nenhum endereço válido em WALLETS: ${INVALID.join(', ')}`);
     const chains = Object.keys(CHAINS).filter((c) => !ONLY.length || ONLY.includes(c));
     const prev = loadState();
     const next = {};
@@ -194,8 +200,13 @@ async function main() {
         }
     }
 
+    if (SOLANA.length) console.log(`Carteiras Solana ignoradas (ainda não suportadas): ${SOLANA.join(', ')}`);
+    if (INVALID.length) errors.push(`Endereço(s) não reconhecido(s) em WALLETS: ${INVALID.join(', ')}`);
     if (TEST) {
-        messages.unshift(`✅ <b>Alertas de pools ativos</b>\n${WALLETS.length} carteira(s), ${chains.length} rede(s).\n${summary.length ? esc(summary.join('\n')) : 'Nenhuma pool com liquidez ou dívida no Aave encontrada.'}${errors.length ? `\n\nAvisos de leitura:\n${esc(errors.join('\n'))}` : ''}`);
+        const notes = [
+            SOLANA.length ? `${SOLANA.length} carteira(s) Solana ainda não são verificadas: ${SOLANA.map(short).join(', ')}` : '',
+        ].filter(Boolean).join('\n');
+        messages.unshift(`✅ <b>Alertas de pools ativos</b>\n${WALLETS.length} carteira(s) EVM, ${chains.length} rede(s).${notes ? `\n${esc(notes)}` : ''}\n${summary.length ? esc(summary.join('\n')) : 'Nenhuma pool com liquidez ou dívida no Aave encontrada.'}${errors.length ? `\n\nAvisos de leitura:\n${esc(errors.join('\n'))}` : ''}`);
     }
     for (const m of messages) await telegram(m);
     saveState(next);
