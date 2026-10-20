@@ -175,7 +175,8 @@
             <p class="footnote">Só o endereço. O painel nunca pede frase-semente nem chave privada, e não conecta nem assina nada.</p>
             <label>Nome<input id="walletName" class="input" maxlength="40" autocomplete="off" placeholder="Ex.: MetaMask principal, Rabby, Ledger"></label>
             <fieldset class="color-pick">
-                <legend>Redes para ler</legend>
+                <legend>Redes para ler (endereços 0x)</legend>
+                <p class="footnote">Endereços Solana são reconhecidos sozinhos e lidos na rede Solana.</p>
                 <div id="walletChains" class="chain-checks"></div>
             </fieldset>
             <div class="dialog-actions">
@@ -255,6 +256,7 @@
     <script src="js/lists.js"></script>
     <script src="js/views/market.js"></script>
     <script src="js/views/asset.js"></script>
+    <script src="js/solana-core.js"></script>
     <script src="js/web3.js"></script>
     <script src="js/poolmath.js"></script>
     <script src="js/views/discover.js"></script>

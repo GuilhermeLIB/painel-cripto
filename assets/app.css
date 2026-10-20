@@ -727,7 +727,7 @@ code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px;
 .subtabs a.is-active { color: var(--ink); border-bottom-color: var(--brand); }
 .ds-root { display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr); }
 .ds-root > * { min-width: 0; }
-.ds-chains { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+.ds-chains { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
 .ds-chain { display: grid; gap: 2px; text-align: left; padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--line); border-top: 3px solid var(--c); background: var(--surface-2); color: var(--ink); font: inherit; cursor: pointer; }
 .ds-chain:hover { border-color: var(--line-strong); border-top-color: var(--c); }
 .ds-chain.is-on { background: color-mix(in srgb, var(--c) 12%, var(--surface-2)); border-color: var(--c); }

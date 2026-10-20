@@ -57,11 +57,11 @@ e o preço que estavam salvos.
 
 ## Carteiras Web3
 
-A aba **Web3** lê carteiras pelo endereço público (0x…), sem conectar nem
-assinar nada. Redes: Ethereum, Arbitrum, Base, Optimism e Polygon.
-Mostra tokens, gás disponível, depósitos e empréstimos no Aave v3 (com fator
-de saúde) e posições da Uniswap v3, além da comparação com o que foi
-registrado na Carteira.
+A aba **Web3** lê carteiras pelo endereço público, sem conectar nem assinar
+nada. Endereços 0x… são lidos em Ethereum, Arbitrum, Base, Optimism, Polygon e
+BNB Chain: tokens, gás, Aave v3 (com fator de saúde) e posições de liquidez da
+Uniswap v3, PancakeSwap v3 (inclusive em farm) e Aerodrome (inclusive em
+staking). Endereços Solana: tokens e posições da Orca, Raydium e Meteora.
 
 Fontes públicas, sem chave: RPCs públicos (publicnode e oficiais das redes),
 Blockscout para descobrir tokens e DefiLlama para preços. Se um RPC público
@@ -92,7 +92,8 @@ Para receber alertas no Telegram com o painel fechado, veja **ALERTAS.md**.
 - `js/indicators.js`: médias, RSI, MACD, Bollinger, suporte e resistência,
   e a leitura de aporte ajustada à volatilidade de cada cripto.
 - `js/lists.js`: listas manuais e automáticas.
-- `js/web3.js`: leitura on-chain (RPC, Multicall3, Aave, Uniswap, preços).
+- `js/web3.js`: leitura on-chain (RPC, Multicall3, Aave, Uniswap, PancakeSwap, Aerodrome, preços).
+- `js/solana-core.js`: leitura de Solana (Orca, Raydium, Meteora), usada pelo painel e pelos alertas.
 - `js/poolmath.js`: matemática de liquidez concentrada (faixas, depósito, perda impermanente).
 - `scripts/alertas-pools.mjs` e `.github/workflows/alertas-pools.yml`: alertas agendados no Telegram.
 - `js/views/`: telas Mercado, Análise, Carteira (com o plano mensal), Web3 e Alertas.

@@ -70,7 +70,7 @@ window.App = window.App || {};
                 transactions: Array.isArray(parsed.transactions) ? parsed.transactions.filter(isValidTx).map(normalizeTx) : [],
                 alerts: Array.isArray(parsed.alerts) ? parsed.alerts : [],
                 monthly: { ...base.monthly, ...parsed.monthly, log: { ...parsed.monthly?.log } },
-                wallets: Array.isArray(parsed.wallets) ? parsed.wallets.filter((w) => w && /^0x[0-9a-fA-F]{40}$/.test(w.address)) : [],
+                wallets: Array.isArray(parsed.wallets) ? parsed.wallets.filter((w) => w && (/^0x[0-9a-fA-F]{40}$/.test(w.address) || /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(w.address))) : [],
                 walletSnapshots: parsed.walletSnapshots && typeof parsed.walletSnapshots === 'object' ? parsed.walletSnapshots : {},
                 web3Settings: { ...base.web3Settings, ...parsed.web3Settings, rpc: { ...parsed.web3Settings?.rpc } },
             };

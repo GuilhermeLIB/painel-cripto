@@ -66,7 +66,7 @@ App.views = App.views || {};
     async function gasTable(force = false) {
         if (!force && gasCache.data && Date.now() - gasCache.at < 2 * 60 * 1000) return gasCache.data;
         const chains = App.web3.CHAINS;
-        const rows = await Promise.all(Object.entries(chains).map(async ([key, c]) => {
+        const rows = await Promise.all(Object.entries(chains).filter(([, c]) => !c.solana).map(async ([key, c]) => {
             try {
                 const gwei = await App.web3.gasPriceGwei(key);
                 const nativeUsd = App.priceOf(c.native) ?? null;
@@ -76,6 +76,9 @@ App.views = App.views || {};
                 return { key, name: c.name, error: true };
             }
         }));
+        // Solana: sem leilão de gás como no Ethereum; as taxas por transação ficam em frações de centavo.
+        const solPrice = App.priceOf('SOL');
+        rows.push({ key: 'solana', name: 'Solana', gwei: null, mint: solPrice ? 0.0002 * solPrice : null, rebalance: solPrice ? 0.0006 * solPrice : null, solana: true });
         gasCache = { at: Date.now(), data: rows };
         return rows;
     }
@@ -259,23 +262,23 @@ App.views = App.views || {};
                 const pct = capital && r.rebalance ? (r.rebalance / capital) * 100 : null;
                 return html`<tr${raw(best && r.key === best.key ? ' class="is-best"' : '')}>
                     <td>${raw(html`<span class="chain-badge" style="--c:${App.web3.CHAINS[r.key].color}">${r.name}</span>`)}</td>
-                    <td class="col-num">${fmt.number(r.gwei, r.gwei < 1 ? 4 : 1)} gwei</td>
+                    <td class="col-num">${r.solana ? 'taxa fixa + prioridade' : `${fmt.number(r.gwei, r.gwei < 1 ? 4 : 1)} gwei`}</td>
                     <td class="col-num">${usdCost(r.mint)}</td>
                     <td class="col-num">${usdCost(r.rebalance)}</td>
                     <td class="col-num ${pct === null ? '' : pct > 1 ? 'delta-down' : pct > 0.3 ? '' : 'delta-up'}">${pct === null ? '—' : `${fmt.number(pct, pct < 0.1 ? 3 : 2)}%`}</td>
                 </tr>`;
             }).join(''))}</tbody>
         </table></div>
-        <p class="footnote">Estimativa com o gás de agora: cerca de ${fmt.number(GAS_MINT / 1000, 0)} mil unidades para montar e ${fmt.number(GAS_REBALANCE / 1000, 0)} mil para remontar (retirar, coletar, trocar e montar de novo). Nas redes de segunda camada há também uma pequena taxa de dados que não aparece aqui. ${raw(best ? html`Hoje, a mais barata é <strong>${best.name}</strong>. Acima de ~1% do capital por remontagem, faixas estreitas raramente compensam.` : '')} Confira também o volume de cada pool no app: taxa barata não adianta sem negociação.</p>`;
+        <p class="footnote">Estimativa com o gás de agora: cerca de ${fmt.number(GAS_MINT / 1000, 0)} mil unidades para montar e ${fmt.number(GAS_REBALANCE / 1000, 0)} mil para remontar (retirar, coletar, trocar e montar de novo). Nas redes de segunda camada há também uma pequena taxa de dados que não aparece aqui. Na Solana a taxa é estimada com folga para prioridade; abrir uma posição ainda exige um depósito de aluguel das contas, devolvido quando você fecha a posição. ${raw(best ? html`Hoje, a mais barata é <strong>${best.name}</strong>. Acima de ~1% do capital por remontagem, faixas estreitas raramente compensam.` : '')} Confira também o volume de cada pool no app: taxa barata não adianta sem negociação.</p>`;
     }
 
     // ---------- Monitoramento ----------
     function orient(u) {
         // Exibe sempre como "token volátil cotado no outro": se token0 for stablecoin, inverte.
         if (isStable(u.symbol0) && !isStable(u.symbol1)) {
-            return { a: u.symbol1, b: u.symbol0, lower: 1 / u.priceUpper, upper: 1 / u.priceLower, price: 1 / u.priceNow, qtyA: u.amount1, qtyB: u.amount0 };
+            return { a: u.symbol1, b: u.symbol0, lower: 1 / u.priceUpper, upper: 1 / u.priceLower, price: 1 / u.priceNow, qtyA: u.amount1 ?? undefined, qtyB: u.amount0 ?? undefined };
         }
-        return { a: u.symbol0, b: u.symbol1, lower: u.priceLower, upper: u.priceUpper, price: u.priceNow, qtyA: u.amount0, qtyB: u.amount1 };
+        return { a: u.symbol0, b: u.symbol1, lower: u.priceLower, upper: u.priceUpper, price: u.priceNow, qtyA: u.amount0 ?? undefined, qtyB: u.amount1 ?? undefined };
     }
 
     function monitored() {
@@ -285,7 +288,7 @@ App.views = App.views || {};
             r?.parts?.forEach((p) => p.uni.forEach((u) => {
                 if (!u.symbol0 || !u.priceLower) return;
                 const o = orient(u);
-                out.push({ key: `chain:${p.chain}:${u.id}`, source: `${w.name} · ${App.web3.CHAINS[p.chain].name}`, chain: p.chain, fee: u.fee / 10000, ...o, usd: u.usd, feesUsd: feeUsd(u), onchain: true });
+                out.push({ key: `chain:${p.chain}:${u.dex}:${u.id}`, source: `${w.name} · ${App.web3.CHAINS[p.chain].name} · ${u.dex ?? ''}${u.staked ? ' (staking)' : ''}`, chain: p.chain, fee: (u.fee ?? 0) / 10000, ...o, usd: u.usd, feesUsd: feeUsd(u), onchain: true });
             }));
         });
         S.pools.filter((p) => p.status === 'ativa').forEach((p) => {

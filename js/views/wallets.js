@@ -124,7 +124,7 @@ App.views = App.views || {};
 
         $('#w3Summary', root).innerHTML = !any ? html`
             <div class="empty-state">
-                <p>Cadastre o endereço público de cada carteira (começa com 0x). O painel lê saldos, empréstimos no Aave e pools da Uniswap em Ethereum, Arbitrum, Base, Optimism e Polygon.</p>
+                <p>Cadastre o endereço público de cada carteira. Endereços 0x… são lidos em Ethereum, Arbitrum, Base, Optimism, Polygon e BNB Chain (saldos, Aave, Uniswap, PancakeSwap e Aerodrome); endereços Solana, com saldos e pools da Orca, Raydium e Meteora.</p>
                 <button class="btn btn-primary" type="button" data-w3="add">Adicionar carteira</button>
             </div>` : html`
             <div class="pf-summary">
@@ -144,6 +144,11 @@ App.views = App.views || {};
         renderReconcile();
     }
 
+    function walletChains(w) {
+        if (W3().isSolanaAddress(w.address)) return ['solana'];
+        return (w.chains?.length ? w.chains : W3().EVM_CHAINS).filter((c) => W3().EVM_CHAINS.includes(c));
+    }
+
     function chainBadge(key) {
         const c = W3().CHAINS[key];
         return html`<span class="chain-badge" style="--c:${c.color}" title="${c.name}">${c.name}</span>`;
@@ -156,7 +161,7 @@ App.views = App.views || {};
         const last = snaps[snaps.length - 1];
         const delta = r?.lines && r.prev ? r.total - r.prev.usd : null;
         const isOpen = open.has(w.id);
-        const chains = (w.chains?.length ? w.chains : Object.keys(W3().CHAINS));
+        const chains = walletChains(w);
         return html`<article class="panel w3-wallet" style="--wc:${w.color}" data-wallet="${w.id}">
             <header class="w3-head">
                 <div class="w3-id">
@@ -218,12 +223,12 @@ App.views = App.views || {};
         const pools = r.parts.flatMap((p) => p.uni.map((u) => ({ ...u, chain: p.chain })));
         const closed = pools.filter((u) => u.closedCount).reduce((a, u) => a + u.closedCount, 0);
         const poolHtml = pools.filter((u) => u.symbol0).map((u) => html`<tr>
-            <td><strong>${u.symbol0}/${u.symbol1}</strong> <span class="muted small">${fmt.number(u.fee / 10000, 2)}%</span></td>
+            <td><strong>${u.symbol0}/${u.symbol1}</strong> <span class="muted small">${u.fee !== null && u.fee !== undefined ? `${fmt.number(u.fee / 10000, 2)}%` : ''}</span><small class="muted">${u.dex ?? ''}${u.staked ? ' · em staking' : ''}</small></td>
             <td>${raw(chainBadge(u.chain))}</td>
             <td><span class="chip chip-${u.inRange ? 'up' : 'warn'}">${u.inRange ? 'Na faixa' : 'Fora da faixa'}</span></td>
-            <td class="col-num">${priv ? '•••' : `${fmt.qty(u.amount0)} ${u.symbol0}`}<small class="muted">${priv ? '' : `${fmt.qty(u.amount1)} ${u.symbol1}`}</small></td>
+            <td class="col-num">${u.amount0 === null ? 'ver no app' : (priv ? '•••' : `${fmt.qty(u.amount0)} ${u.symbol0}`)}<small class="muted">${u.amount1 === null || priv ? '' : `${fmt.qty(u.amount1)} ${u.symbol1}`}</small></td>
             <td class="col-num">${priv ? '•••' : (u.owed0 || u.owed1 ? `${fmt.qty(u.owed0)} / ${fmt.qty(u.owed1)}` : '—')}</td>
-            <td class="col-num"><strong>${u.priced ? money(u.usd) : 'sem preço'}</strong></td>
+            <td class="col-num"><strong>${u.priced ? money(u.usd) : (u.bins ? '—' : 'sem preço')}</strong></td>
         </tr>`).join('');
 
         const errors = r.parts.flatMap((p) => p.errors.map((e) => `${W3().CHAINS[p.chain].name}: ${e}`));
@@ -234,16 +239,16 @@ App.views = App.views || {};
                 <h3 class="w3-h3">Tokens</h3>
                 ${raw(tokens ? html`<div class="table-wrap"><table class="data-table"><thead><tr><th>Token</th><th>Rede</th><th class="col-num">Quantidade</th><th class="col-num">Preço</th><th class="col-num">Valor</th></tr></thead><tbody>${raw(tokens)}</tbody></table></div>` : '<p class="muted">Nenhum token com valor.</p>')}
                 ${raw(hidden ? html`<p class="footnote">${hidden} token(s) escondidos por valer menos de US$ 1, não ter preço ou serem suspeitos. <button class="link-btn" type="button" data-w3="small">${showSmall ? 'Esconder' : 'Mostrar todos'}</button></p>` : '')}
-                ${raw(listMode.length ? html`<p class="footnote">Em ${listMode.join(', ')} a descoberta automática não respondeu; foram lidos só os tokens conhecidos e os que você adicionou nas configurações.</p>` : '')}
+                ${raw(listMode.length ? html`<p class="footnote">Em ${listMode.join(', ')}, a leitura usou a lista de tokens conhecidos e os que você adicionou nas configurações (sem descoberta automática).</p>` : '')}
             </section>
             ${raw(aaveHtml ? html`<section><h3 class="w3-h3">Empréstimos e depósitos</h3>${raw(aaveHtml)}</section>` : '')}
-            ${raw(poolHtml || closed ? html`<section><h3 class="w3-h3">Pools de liquidez (Uniswap v3)</h3>
+            ${raw(poolHtml || closed ? html`<section><h3 class="w3-h3">Pools de liquidez</h3>
                 ${raw(poolHtml ? html`<div class="table-wrap"><table class="data-table"><thead><tr><th>Par</th><th>Rede</th><th>Status</th><th class="col-num">Na pool</th><th class="col-num">Taxas a coletar</th><th class="col-num">Valor</th></tr></thead><tbody>${raw(poolHtml)}</tbody></table></div>` : '')}
                 ${raw(closed ? html`<p class="footnote">${closed} posição(ões) encerrada(s), sem liquidez.</p>` : '')}
-                <p class="footnote">“Taxas a coletar” mostra o valor registrado na última interação com a posição; a Uniswap pode ter acumulado mais desde então.</p>
+                <p class="footnote">“Taxas a coletar” mostra o valor registrado na última interação com a posição; pode haver mais acumulado desde então. Nas posições da Meteora (bins) o painel acompanha a faixa e o preço, mas o valor fica no app.</p>
             </section>` : '')}
             ${raw(errors.length ? html`<details class="w3-errors"><summary>${errors.length} aviso(s) de leitura</summary><ul>${raw(errors.map((e) => html`<li>${e}</li>`).join(''))}</ul></details>` : '')}
-            <p class="footnote">Ver no explorador: ${raw((w.chains?.length ? w.chains : Object.keys(W3().CHAINS)).map((c) => html`<a href="${W3().CHAINS[c].explorer}/address/${w.address}" target="_blank" rel="noopener">${W3().CHAINS[c].name}</a>`).join(' · '))}</p>
+            <p class="footnote">Ver no explorador: ${raw(walletChains(w).map((c) => html`<a href="${c === 'solana' ? `https://solscan.io/account/${w.address}` : `${W3().CHAINS[c].explorer}/address/${w.address}`}" target="_blank" rel="noopener">${W3().CHAINS[c].name}</a>`).join(' · '))}</p>
         </div>`;
     }
 
@@ -274,8 +279,8 @@ App.views = App.views || {};
         $('#walletName').value = w?.name ?? '';
         $('#walletAddress').value = w?.address ?? '';
         $('#walletDelete').hidden = !w;
-        const chosen = w?.chains?.length ? w.chains : Object.keys(App.web3.CHAINS);
-        $('#walletChains').innerHTML = Object.entries(App.web3.CHAINS).map(([k, c]) => html`<label class="chain-check" style="--c:${c.color}"><input type="checkbox" value="${k}" ${chosen.includes(k) ? 'checked' : ''}><span>${c.name}</span></label>`).join('');
+        const chosen = w?.chains?.length ? w.chains : App.web3.EVM_CHAINS;
+        $('#walletChains').innerHTML = App.web3.EVM_CHAINS.map((k) => [k, App.web3.CHAINS[k]]).map(([k, c]) => html`<label class="chain-check" style="--c:${c.color}"><input type="checkbox" value="${k}" ${chosen.includes(k) ? 'checked' : ''}><span>${c.name}</span></label>`).join('');
         dlg.showModal();
         (w ? $('#walletName') : $('#walletAddress')).focus();
     }
@@ -295,11 +300,12 @@ App.views = App.views || {};
         $('#walletForm').addEventListener('submit', (event) => {
             event.preventDefault();
             const address = $('#walletAddress').value.trim();
-            if (!App.web3.isAddress(address)) { toast('Endereço inválido: precisa começar com 0x e ter 42 caracteres.', 'bad'); return; }
+            if (!App.web3.isAddress(address)) { toast('Endereço inválido: use um endereço 0x… (Ethereum, BNB e outras) ou um endereço Solana.', 'bad'); return; }
             if (/^(0x)?[0-9a-f]{64}$/i.test(address)) { toast('Isso parece uma chave privada. Nunca cole chaves; use só o endereço público.', 'bad'); return; }
             const dup = S.wallets.find((x) => x.address.toLowerCase() === address.toLowerCase() && x.id !== dlg.dataset.id);
             if (dup) { toast(`Esse endereço já está cadastrado como “${dup.name}”.`, 'bad'); return; }
-            const chains = $$('#walletChains input:checked').map((i) => i.value);
+            const solana = App.web3.isSolanaAddress(address);
+            const chains = solana ? ['solana'] : $$('#walletChains input:checked').map((i) => i.value);
             if (!chains.length) { toast('Escolha pelo menos uma rede.', 'bad'); return; }
             const saved = store.saveWallet({ id: dlg.dataset.id || null, name: $('#walletName').value.trim() || `Carteira ${S.wallets.length + 1}`, address, chains });
             dlg.close();
@@ -324,7 +330,7 @@ App.views = App.views || {};
         $('#w3Custom', root).innerHTML = (st.customTokens ?? []).length
             ? st.customTokens.map((t, i) => html`<li><span>${raw(chainBadge(t.chain))} <strong>${t.symbol}</strong> <span class="muted mono-addr">${App.web3.shortAddress(t.address)}</span></span><button class="icon-btn" type="button" data-rm-token="${i}" aria-label="Remover ${t.symbol}">✕</button></li>`).join('')
             : '<li class="muted">Nenhum token extra.</li>';
-        $('#w3TokChain', root).innerHTML = Object.entries(App.web3.CHAINS).map(([k, c]) => html`<option value="${k}">${c.name}</option>`).join('');
+        $('#w3TokChain', root).innerHTML = App.web3.EVM_CHAINS.map((k) => html`<option value="${k}">${App.web3.CHAINS[k].name}</option>`).join('');
     }
 
     async function addCustomToken() {
@@ -394,7 +400,7 @@ App.views = App.views || {};
                 <header class="page-head">
                     <div>
                         <h1>Carteiras Web3</h1>
-                        <p class="lede">Leitura pública pelo endereço: nenhuma conexão de carteira, nenhuma assinatura. Nunca digite sua frase-semente ou chave privada aqui.</p>
+                        <p class="lede">Leitura pública pelo endereço (0x… ou Solana): nenhuma conexão de carteira, nenhuma assinatura. Nunca digite sua frase-semente ou chave privada aqui.</p>
                     </div>
                     <div class="toolbar">
                         <button class="btn" type="button" data-w3="refresh-all" ${S.wallets.length ? '' : 'disabled'}>Atualizar todas</button>

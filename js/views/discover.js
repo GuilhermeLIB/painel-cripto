@@ -8,27 +8,46 @@ window.App = window.App || {};
     const S = store.state;
 
     const GT = 'https://api.geckoterminal.com/api/v2';
+    // Ordem de consulta: as redes mais usadas primeiro.
     const NETS = {
         ethereum: { gt: 'eth', name: 'Ethereum' },
-        arbitrum: { gt: 'arbitrum', name: 'Arbitrum' },
+        bnb: { gt: 'bsc', name: 'BNB Chain' },
+        solana: { gt: 'solana', name: 'Solana' },
         base: { gt: 'base', name: 'Base' },
+        arbitrum: { gt: 'arbitrum', name: 'Arbitrum' },
         optimism: { gt: 'optimism', name: 'Optimism' },
         polygon: { gt: 'polygon_pos', name: 'Polygon' },
     };
     // Tokens "de primeira linha": usados para o destaque de pools mais seguras.
-    const BLUE = new Set(['ETH', 'WETH', 'BTC', 'WBTC', 'CBBTC', 'TBTC', 'USDC', 'USDT', 'DAI', 'USDC.E', 'USDBC', 'STETH', 'WSTETH', 'WEETH', 'CBETH', 'RETH', 'ARB', 'OP', 'POL', 'WPOL', 'WMATIC', 'LINK', 'UNI', 'AAVE', 'USDS', 'USDE', 'GHO']);
-    const CACHE_MS = 5 * 60 * 1000;
+    const BLUE = new Set(['SOL', 'WSOL', 'JITOSOL', 'MSOL', 'BNB', 'WBNB', 'BTCB', 'ETH', 'WETH', 'BTC', 'WBTC', 'CBBTC', 'TBTC', 'USDC', 'USDT', 'DAI', 'USDC.E', 'USDBC', 'STETH', 'WSTETH', 'WEETH', 'CBETH', 'RETH', 'ARB', 'OP', 'POL', 'WPOL', 'WMATIC', 'LINK', 'UNI', 'AAVE', 'USDS', 'USDE', 'GHO']);
+    const CACHE_MS = 15 * 60 * 1000;
 
     let root = null;
     let offs = [];
     let data = { at: 0, pools: [], errors: [] };
     let loading = false;
+    let progress = null;
     let view = { chain: 'all', dex: 'all', sort: 'apr', minTvl: 250000, mine: false, concentrated: false, text: '' };
 
     // ---------- Coleta ----------
-    async function gt(path) {
+    // A API pública do GeckoTerminal limita as consultas por minuto. As chamadas
+    // são feitas em fila, com intervalo, e uma resposta 429 espera e tenta de novo.
+    const GAP_MS = window.__gtGap ?? 2600;
+    let lastCall = 0;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    async function gt(path, attempt = 0) {
+        const wait = lastCall + GAP_MS - Date.now();
+        if (wait > 0) await sleep(wait);
+        lastCall = Date.now();
         const r = await fetch(`${GT}${path}`, { headers: { accept: 'application/json' } });
-        if (r.status === 429) throw new Error('limite de consultas do GeckoTerminal; tente em 1 minuto');
+        if (r.status === 429 && attempt < 2) {
+            if (root) { progress.waiting = true; render(); }
+            await sleep((window.__gtRetry ?? 20000) * (attempt + 1));
+            if (root) progress.waiting = false;
+            return gt(path, attempt + 1);
+        }
+        if (r.status === 429) throw new Error('limite de consultas do GeckoTerminal; tente de novo em alguns minutos');
         if (!r.ok) throw new Error(`GeckoTerminal HTTP ${r.status}`);
         return r.json();
     }
@@ -67,43 +86,58 @@ window.App = window.App || {};
                 txs: buys + sells,
                 priceChange: Number(a.price_change_percentage?.h24) || 0,
                 ageDays: created ? (Date.now() - created) / 86400000 : null,
-                concentrated: /v3|slipstream|_cl|clmm|v4|algebra/i.test(dexId),
+                concentrated: /v3|slipstream|_cl|clmm|v4|algebra|orca|whirlpool|meteora|dlmm/i.test(dexId),
                 trending,
             };
         });
+    }
+
+    function saveCache() {
+        try { localStorage.setItem('gt-pools', JSON.stringify(data)); } catch { /* cheio */ }
     }
 
     async function load(force = false) {
         if (loading) return;
         if (!force && data.pools.length && Date.now() - data.at < CACHE_MS) { render(); return; }
         try {
-            const cached = JSON.parse(sessionStorage.getItem('gt-pools') || 'null');
-            if (!force && cached && Date.now() - cached.at < CACHE_MS) { data = cached; render(); return; }
+            const cached = JSON.parse(localStorage.getItem('gt-pools') || 'null');
+            if (cached?.pools?.length) {
+                data = cached;
+                if (!force && Date.now() - cached.at < CACHE_MS) { render(); return; }
+            }
         } catch { /* sem cache */ }
         loading = true;
-        render();
-        const pools = new Map();
+        const pools = new Map(force ? [] : data.pools.map((p) => [p.id, p]));
         const errors = [];
-        // 2 páginas por volume + tendências, por rede (≈15 consultas, dentro do limite de 30/min).
-        for (const [chain, n] of Object.entries(NETS)) {
-            const jobs = [
-                gt(`/networks/${n.gt}/pools?sort=h24_volume_usd_desc&page=1&include=base_token,quote_token,dex`).then((j) => parse(j, chain)),
-                gt(`/networks/${n.gt}/pools?sort=h24_volume_usd_desc&page=2&include=base_token,quote_token,dex`).then((j) => parse(j, chain)),
-                gt(`/networks/${n.gt}/trending_pools?include=base_token,quote_token,dex`).then((j) => parse(j, chain, true)),
-            ];
-            const res = await Promise.allSettled(jobs);
-            res.forEach((r) => {
-                if (r.status === 'fulfilled') r.value.forEach((p) => {
-                    const prev = pools.get(p.id);
-                    pools.set(p.id, prev ? { ...prev, trending: prev.trending || p.trending } : p);
-                });
-                else errors.push(`${n.name}: ${r.reason.message}`);
-            });
-            if (root) { data = { at: Date.now(), pools: [...pools.values()], errors }; render(); }
+        const nets = Object.entries(NETS);
+        // Rodadas: primeiro a página principal de todas as redes (o painel já fica útil),
+        // depois as tendências e, por último, a segunda página de volume.
+        const rounds = [
+            (n) => `/networks/${n.gt}/pools?sort=h24_volume_usd_desc&page=1&include=base_token,quote_token,dex`,
+            (n) => `/networks/${n.gt}/trending_pools?include=base_token,quote_token,dex`,
+            (n) => `/networks/${n.gt}/pools?sort=h24_volume_usd_desc&page=2&include=base_token,quote_token,dex`,
+        ];
+        progress = { done: 0, total: rounds.length * nets.length, waiting: false };
+        render();
+        for (let r = 0; r < rounds.length; r += 1) {
+            for (const [chain, n] of nets) {
+                try {
+                    const json = await gt(rounds[r](n));
+                    parse(json, chain, r === 1).forEach((p) => {
+                        const prev = pools.get(p.id);
+                        pools.set(p.id, prev ? { ...p, trending: r === 1 || prev.trending } : p);
+                    });
+                } catch (error) {
+                    errors.push(`${n.name}: ${error.message}`);
+                }
+                progress.done += 1;
+                data = { at: Date.now(), pools: [...pools.values()], errors: [...new Set(errors)] };
+                if (root) render();
+            }
         }
-        data = { at: Date.now(), pools: [...pools.values()], errors: [...new Set(errors)] };
-        try { sessionStorage.setItem('gt-pools', JSON.stringify(data)); } catch { /* cheio */ }
+        saveCache();
         loading = false;
+        progress = null;
         render();
     }
 
@@ -192,7 +226,7 @@ window.App = window.App || {};
         const dexSel = $('#dsDex', root);
         dexSel.innerHTML = html`<option value="all">Todos os apps</option>${raw(dexes.map((d) => html`<option ${d === view.dex ? 'selected' : ''}>${d}</option>`).join(''))}`;
         $('#dsStatus', root).innerHTML = loading
-            ? html`<span class="muted">Consultando pools… ${data.pools.length ? `${data.pools.length} até agora` : ''}</span>`
+            ? html`<span class="muted">${progress?.waiting ? 'Limite da API atingido, aguardando para continuar…' : `Consultando pools (${progress ? Math.round((progress.done / progress.total) * 100) : 0}%)…`} ${data.pools.length ? `${data.pools.length} até agora` : ''}</span>`
             : data.pools.length
                 ? html`<span class="muted">${data.pools.length} pools · atualizado às ${fmt.time(new Date(data.at))}</span>${raw(data.errors.length ? html` <span class="delta-down" title="${data.errors.join(' | ')}">· ${data.errors.length} falha(s)</span>` : '')}`
                 : html`<span class="muted">${data.errors.length ? `Não consegui consultar: ${data.errors[0]}` : 'Sem dados ainda.'}</span>`;

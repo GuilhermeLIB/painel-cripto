@@ -1,13 +1,21 @@
 # Alertas de pools no Telegram
 
 Uma tarefa agendada do GitHub Actions (`.github/workflows/alertas-pools.yml`)
-roda a cada hora, lê as posições da Uniswap v3 e o fator de saúde do Aave v3
-das suas carteiras e manda mensagem no Telegram quando:
+roda a cada hora, lê as posições de liquidez das suas carteiras e o fator de
+saúde do Aave v3 e manda mensagem no Telegram quando:
 
 - uma posição sai da faixa (e lembra a cada 24 h enquanto continuar fora);
 - uma posição fica perto da borda (menos de 12% da faixa sobrando);
 - uma posição volta para a faixa;
 - o fator de saúde do Aave fica abaixo de 1,5 (ou de 1,2, crítico).
+
+Apps verificados:
+
+- Endereços 0x…: Uniswap v3 (Ethereum, Arbitrum, Base, Optimism, Polygon e
+  BNB Chain), PancakeSwap v3 (BNB Chain, Ethereum, Arbitrum e Base, incluindo
+  posições em farm), Aerodrome Slipstream (Base, incluindo posições em staking)
+  e Aave v3.
+- Endereços Solana: Orca (Whirlpools), Raydium (CLMM) e Meteora (DLMM).
 
 Só lê dados públicos da blockchain. Nada de chave privada.
 
@@ -32,14 +40,15 @@ No repositório: **Settings → Secrets and variables → Actions → New reposi
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | o token do BotFather |
 | `TELEGRAM_CHAT_ID` | o número do chat id |
-| `WALLETS` | endereços públicos separados por vírgula (a aba Pools do painel gera esse valor) |
+| `WALLETS` | endereços públicos separados por vírgula, 0x… e Solana misturados (a aba Pools do painel gera esse valor) |
 
 Opcionais:
 
 | Nome | Para quê |
 |---|---|
-| `RPC_ETHEREUM`, `RPC_ARBITRUM`, `RPC_BASE`, `RPC_OPTIMISM`, `RPC_POLYGON` (segredos) | URL de RPC própria se os RPCs públicos falharem |
-| `CHAINS` (em *Variables*) | redes a verificar, ex.: `arbitrum,base` (padrão: todas) |
+| `RPC_ETHEREUM`, `RPC_ARBITRUM`, `RPC_BASE`, `RPC_OPTIMISM`, `RPC_POLYGON`, `RPC_BNB`, `RPC_SOLANA` (segredos) | URL de RPC própria se os RPCs públicos falharem. Para a Meteora, um RPC próprio de Solana costuma ser necessário |
+| `BLOCKSCOUT_KEY` (segredo) | chave gratuita do Blockscout; ajuda a achar posições do Aerodrome em staking |
+| `CHAINS` (em *Variables*) | redes a verificar, ex.: `arbitrum,base,bnb,solana` (padrão: todas) |
 | `EDGE_PCT` (em *Variables*) | quanto da faixa conta como “perto da borda” (padrão 12) |
 | `HF_MIN` (em *Variables*) | fator de saúde mínimo do Aave (padrão 1.5) |
 
