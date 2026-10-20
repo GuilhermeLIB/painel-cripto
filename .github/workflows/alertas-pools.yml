@@ -1,0 +1,62 @@
+name: Alertas de pools
+
+on:
+  schedule:
+    - cron: '7 * * * *'   # a cada hora, no minuto 7 (horário UTC)
+  workflow_dispatch:
+    inputs:
+      teste:
+        description: 'Enviar também uma mensagem de teste com o resumo'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: alertas-pools
+  cancel-in-progress: false
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Restaurar o estado da última verificação
+        uses: actions/cache/restore@v4
+        with:
+          path: .alert-state
+          key: alert-state-${{ github.run_id }}
+          restore-keys: alert-state-
+
+      - name: Instalar dependência
+        run: npm install --no-save --no-package-lock ethers@6.13.4
+
+      - name: Verificar pools e Aave
+        run: node scripts/alertas-pools.mjs
+        env:
+          WALLETS: ${{ secrets.WALLETS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RPC_ETHEREUM: ${{ secrets.RPC_ETHEREUM }}
+          RPC_ARBITRUM: ${{ secrets.RPC_ARBITRUM }}
+          RPC_BASE: ${{ secrets.RPC_BASE }}
+          RPC_OPTIMISM: ${{ secrets.RPC_OPTIMISM }}
+          RPC_POLYGON: ${{ secrets.RPC_POLYGON }}
+          CHAINS: ${{ vars.CHAINS }}
+          EDGE_PCT: ${{ vars.EDGE_PCT }}
+          HF_MIN: ${{ vars.HF_MIN }}
+          TESTE: ${{ inputs.teste }}
+
+      - name: Guardar o estado para a próxima verificação
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .alert-state
+          key: alert-state-${{ github.run_id }}
