@@ -37,6 +37,7 @@ const CHAINS = {
     optimism: { id: 10, name: 'Optimism', rpcs: ['https://optimism-rpc.publicnode.com', 'https://mainnet.optimism.io'], blockscout: 'https://optimism.blockscout.com', aave: '0x794a61358D6845594F94dc1DB02A252b5b4814aD', dexes: [UNI('0xC36442b4a4522E871399CD717aBDD847Ab11FE88', '0x1F98431c8aD98523631AE4a59f267346ea31F984')] },
     polygon: { id: 137, name: 'Polygon', rpcs: ['https://polygon-bor-rpc.publicnode.com', 'https://polygon-rpc.com'], blockscout: 'https://polygon.blockscout.com', aave: '0x794a61358D6845594F94dc1DB02A252b5b4814aD', dexes: [UNI('0xC36442b4a4522E871399CD717aBDD847Ab11FE88', '0x1F98431c8aD98523631AE4a59f267346ea31F984')] },
     bnb: { id: 56, name: 'BNB Chain', rpcs: ['https://bsc-rpc.publicnode.com', 'https://bsc-dataseed.bnbchain.org'], blockscout: null, aave: '0x6807dc923806fE8Fd134338EABCA509979a7e0cB', dexes: [PANCAKE(MC), UNI('0x7b8A01B39D58278b5DE7e48c8449c9f4F5170613', '0xdB1d10011AD0Ff90774D0C6Bb92e5C5c8b4461F7')] },
+    zksync: { id: 324, name: 'zkSync Era', rpcs: ['https://mainnet.era.zksync.io', 'https://zksync.drpc.org'], multicall: '0xF9cda624FBC7e059355ce98a31693d299FACd963', blockscout: null, aave: '0x78e30497a3c7527d953c6B1E3541b021A98Ac43c', dexes: [UNI('0x0616e5762c1E7Dc3723c50663dF10a162D690a86', '0x8FdA5a7a8dCA67BBcDd10F02Fa0649A937215422')] },
 };
 const SOLANA_RPCS = [env.RPC_SOLANA, 'https://solana-rpc.publicnode.com', 'https://api.mainnet-beta.solana.com'].filter(Boolean);
 const BLOCKSCOUT_KEY = env.BLOCKSCOUT_KEY || '';
@@ -83,7 +84,7 @@ async function rpc(chainKey, method, params) {
 async function multicall(chainKey, calls) {
     if (!calls.length) return [];
     const data = I.mc.encodeFunctionData('aggregate3', [calls.map((c) => ({ target: c.target, allowFailure: true, callData: c.data }))]);
-    const raw = await rpc(chainKey, 'eth_call', [{ to: MULTICALL3, data }, 'latest']);
+    const raw = await rpc(chainKey, 'eth_call', [{ to: CHAINS[chainKey].multicall ?? MULTICALL3, data }, 'latest']);
     return I.mc.decodeFunctionResult('aggregate3', raw)[0].map((r) => (r.success && r.returnData !== '0x' ? r.returnData : null));
 }
 
@@ -141,7 +142,7 @@ async function positionsOf(chainKey, owner, dex) {
     const factoryAbi = slip ? I.factorySlip : I.factory;
     const pools = (await multicall(chainKey, pos.map((p) => ({ target: dex.factory, data: factoryAbi.encodeFunctionData('getPool', [p.token0, p.token1, slip ? p.tickSpacing : p.fee]) }))))
         .map((r) => (r ? factoryAbi.decodeFunctionResult('getPool', r)[0] : null));
-    const slots = await multicall(chainKey, pools.map((p) => ({ target: p ?? MULTICALL3, data: I.pool.encodeFunctionData('slot0', []) })));
+    const slots = await multicall(chainKey, pools.map((p) => ({ target: p ?? (CHAINS[chainKey].multicall ?? MULTICALL3), data: I.pool.encodeFunctionData('slot0', []) })));
     const meta = await tokenMeta(chainKey, [...new Set(pos.flatMap((p) => [p.token0, p.token1]))]);
     return pos.map((p, i) => {
         if (!slots[i]) return null;

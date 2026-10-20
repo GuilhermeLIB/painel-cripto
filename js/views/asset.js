@@ -27,6 +27,19 @@ App.views = App.views || {};
     let buyMap = new Map();
     let resetRange = true;
 
+    let llamaMode = false;
+
+    // Cripto sem par na Binance: candles diários montados com os fechamentos da DefiLlama.
+    async function llamaCandles(days = 730) {
+        const closes = await App.llama?.dailyCloses(symbol, days);
+        if (!closes?.length) return null;
+        return closes.map((c, i) => {
+            const open = i ? closes[i - 1].close : c.close;
+            const time = Math.floor(c.time / 86400) * 86400;
+            return { time, day: new Date(time * 1000).toISOString().slice(0, 10), open, high: Math.max(open, c.close), low: Math.min(open, c.close), close: c.close, volume: 0, quoteVolume: 0 };
+        });
+    }
+
     // Formata preço conforme a cotação do gráfico (dólar ou BTC).
     function px(value) {
         if (!Number.isFinite(value)) return '—';
@@ -252,7 +265,15 @@ App.views = App.views || {};
                 rows = res.rows;
                 synthetic = res.synthetic;
             } else {
-                rows = await App.api.klines(symbol, tf, TF[tf].limit);
+                try {
+                    rows = await App.api.klines(symbol, tf, TF[tf].limit);
+                    llamaMode = false;
+                } catch (error) {
+                    const alt = error.status === 400 ? await llamaCandles() : null;
+                    if (!alt) throw error;
+                    rows = alt;
+                    llamaMode = true;
+                }
                 synthetic = false;
             }
             if (token !== loadToken || !root) return;
@@ -262,7 +283,7 @@ App.views = App.views || {};
             buildCharts();
             fillCharts();
             renderQuoteNote();
-            klineStream.set(quote === 'BTC' && synthetic ? [] : [`${symbol.toLowerCase()}${quote.toLowerCase()}@kline_${tf}`]);
+            klineStream.set((quote === 'BTC' && synthetic) || llamaMode ? [] : [`${symbol.toLowerCase()}${quote.toLowerCase()}@kline_${tf}`]);
         } catch (error) {
             if (token !== loadToken || !root) return;
             $('#chartState', root).textContent = error.status === 400
@@ -338,7 +359,7 @@ App.views = App.views || {};
         const el = $('#signalPanel', root);
         try {
             const [rows, rows4h, rows1w] = await Promise.all([
-                App.api.klines(symbol, '1d', 1000),
+                App.api.klines(symbol, '1d', 1000).catch(async (error) => { const alt = await llamaCandles(1000); if (alt) return alt; throw error; }),
                 App.api.klines(symbol, '4h', 1000).catch(() => []),
                 App.api.klines(symbol, '1w', 520).catch(() => []),
             ]);
@@ -381,6 +402,8 @@ App.views = App.views || {};
                     <div><dt>Suporte</dt><dd>${fmt.money(a.support)}</dd></div>
                     <div><dt>Resistência</dt><dd>${fmt.money(a.resistance)}</dd></div>
                 </dl>
+                <details class="sig-more">
+                <summary>Detalhes do sinal</summary>
                 ${raw(multiHtml)}
                 ${raw(crossHtml)}
                 <ul class="reasons">${raw(a.reasons.map((r) => html`<li><strong>${r.title}</strong> ${r.text}</li>`).join(''))}</ul>
@@ -389,6 +412,7 @@ App.views = App.views || {};
                     <p>Usa o gráfico diário. Desconto quando o preço está ${fmt.pct(t.discount, 1)} ou mais abaixo da ${a.longLabel} com RSI até 50, ou encostado no suporte com RSI até 55. Esticado quando está ${fmt.pct(t.stretched, 1)} acima com RSI acima de 68, ou perto da resistência com RSI acima de 60.</p>
                     <p>A volatilidade diária de ${symbol} é ${fmt.number(a.volatility, 2)}%, ${a.factor > 1.05 ? `${fmt.number(a.factor, 2)}× a referência do Bitcoin, então as faixas foram alargadas na mesma proporção` : 'parecida com a do Bitcoin, então as faixas padrão valem'}.</p>
                     <p class="muted">Leitura técnica automática, não é recomendação de investimento.</p>
+                </details>
                 </details>`;
         } catch (error) {
             if (root) el.innerHTML = '<p class="muted">Não foi possível calcular o sinal agora.</p>';
@@ -398,6 +422,11 @@ App.views = App.views || {};
     function renderQuoteNote() {
         const el = $('#quoteNote', root);
         if (!el) return;
+        if (llamaMode) {
+            el.hidden = false;
+            el.textContent = `${symbol} não tem par na Binance: gráfico diário com o fechamento de cada dia pela DefiLlama (sem candles intradiários, volume ou atualização ao vivo).`;
+            return;
+        }
         el.hidden = quote !== 'BTC';
         el.textContent = synthetic
             ? `Não existe o par ${symbol}/BTC na Binance; o gráfico divide ${symbol}/USDT por BTC/USDT (máximas e mínimas aproximadas, sem atualização ao vivo).`
@@ -454,7 +483,7 @@ App.views = App.views || {};
         const el = $('#statsBody', root);
         try {
             const [daily, btcDaily] = await Promise.all([
-                App.api.dailyHistory(symbol, '2017-08-17'),
+                App.api.dailyHistory(symbol, '2017-08-17').then((d) => (d.length ? d : Promise.reject(new Error('sem histórico')))).catch(async (error) => { const alt = await llamaCandles(2000); if (alt) return alt; throw error; }),
                 symbol === 'BTC' ? Promise.resolve(null) : App.api.dailyHistory('BTC', '2017-08-17').catch(() => null),
             ]);
             if (!root) return;
@@ -731,7 +760,9 @@ App.views = App.views || {};
                                 <button type="button" data-quote="USDT" aria-pressed="true">Em US$</button>
                                 <button type="button" data-quote="BTC" aria-pressed="false">Em BTC</button>
                             </div>`)}
-                            <div id="indSwitch" class="seg seg-soft seg-wrap" role="group" aria-label="Camadas no gráfico">
+                            <details class="layers">
+                            <summary class="btn btn-small">Camadas do gráfico</summary>
+                            <div id="indSwitch" class="layers-menu" role="group" aria-label="Camadas no gráfico">
                                 <button type="button" data-ind="sma" aria-pressed="${S.settings.indicators.sma}">Médias</button>
                                 <button type="button" data-ind="bb" aria-pressed="${S.settings.indicators.bb}">Bollinger</button>
                                 <button type="button" data-ind="volume" aria-pressed="${S.settings.indicators.volume}">Volume</button>
@@ -740,6 +771,7 @@ App.views = App.views || {};
                                 <button type="button" data-ind="levels" aria-pressed="${S.settings.indicators.levels !== false}" title="Suporte, resistência e o preço que você quer pagar">Níveis</button>
                                 <button type="button" data-ind="fib" aria-pressed="${!!S.settings.indicators.fib}" title="Retrações de Fibonacci do último grande movimento">Fibonacci</button>
                             </div>
+                            </details>
                         </div>
                         <div class="chart-legend">
                             <span><i style="background:var(--sma20)"></i>SMA 20</span>
@@ -780,11 +812,8 @@ App.views = App.views || {};
                             <button id="calcBuy" class="btn btn-primary calc-btn" type="button">Registrar esta compra</button>
                         </section>
                         <section class="panel">
-                            <div class="panel-bar"><h2 class="panel-title">Anotações</h2><button id="noteEdit" class="btn btn-small" type="button">Editar</button></div>
+                            <div class="panel-bar"><h2 class="panel-title">Anotações e alertas</h2><button id="noteEdit" class="btn btn-small" type="button">Editar nota</button></div>
                             <div id="noteCard"></div>
-                        </section>
-                        <section class="panel">
-                            <h2 class="panel-title">Alertas de preço</h2>
                             <form id="alertForm" class="inline-form">
                                 <label class="sr-only" for="alertPrice">Preço do alerta em US$</label>
                                 <input id="alertPrice" class="input" inputmode="decimal" placeholder="Preço em US$" autocomplete="off">
@@ -794,10 +823,10 @@ App.views = App.views || {};
                         </section>
                     </aside>
                 </div>
-                <section class="panel">
-                    <div class="panel-bar"><h2 class="panel-title">Histórico e sazonalidade</h2><span class="muted small">Retorno de cada mês</span></div>
+                <details class="panel fold" id="statsFold">
+                    <summary><span class="panel-title">Histórico e sazonalidade</span><span class="muted small">Maior queda, volatilidade e retorno de cada mês</span></summary>
                     <div id="statsBody"><p class="muted">Carregando histórico…</p></div>
-                </section>`;
+                </details>`;
             klineStream = App.api.createStream(`kline-${symbol}`);
             klineStream.onMessage(onKline);
             wire();
@@ -805,7 +834,8 @@ App.views = App.views || {};
             renderAlerts();
             renderNote();
             renderCalc();
-            renderStats();
+            // Estatísticas só carregam quando a seção é aberta (economiza consultas).
+            $('#statsFold', el).addEventListener('toggle', function onOpen() { if (this.open) { renderStats(); this.removeEventListener('toggle', onOpen); } });
             renderPicker();
             if (pickerList === 'smart:discount') App.lists.ensureSignals(() => root && renderPicker());
             loadChart();

@@ -233,7 +233,19 @@ App.views = App.views || {};
         </tr>`;
     }
 
+    function cols() {
+        return { spark: true, vsbtc: false, ath: false, target: false, ...S.settings.marketCols };
+    }
+
+    function applyCols() {
+        const t = $('#marketTable', root);
+        if (!t) return;
+        const c = cols();
+        ['spark', 'vsbtc', 'ath', 'target'].forEach((k) => t.classList.toggle(`hide-${k}`, !c[k]));
+    }
+
     function renderTable(list) {
+        applyCols();
         const body = $('#marketBody', root);
         $$('th[data-sort]', root).forEach((th) => {
             th.setAttribute('aria-sort', th.dataset.sort === sort.key ? (sort.dir > 0 ? 'ascending' : 'descending') : 'none');
@@ -633,6 +645,12 @@ App.views = App.views || {};
                             <option value="position" ${S.settings.heatSize === 'position' ? 'selected' : ''}>Tamanho: valor na carteira</option>
                             <option value="equal" ${S.settings.heatSize === 'equal' ? 'selected' : ''}>Tamanho: igual</option>
                         </select>
+                        <details class="layers">
+                            <summary class="btn btn-small">Colunas</summary>
+                            <div id="colMenu" class="layers-menu" role="group" aria-label="Colunas visíveis">
+                                ${raw([['spark', 'Gráfico'], ['vsbtc', 'vs BTC'], ['ath', 'Da máxima'], ['target', 'Meu preço']].map(([k, l]) => html`<button type="button" data-col="${k}" aria-pressed="${!!cols()[k]}">${l}</button>`).join(''))}
+                            </div>
+                        </details>
                         <span class="spacer"></span>
                         <label class="sr-only" for="filterText">Filtrar nesta lista</label>
                         <input id="filterText" class="input input-small" type="search" placeholder="Filtrar nesta lista" autocomplete="off">
@@ -645,7 +663,7 @@ App.views = App.views || {};
                         </select>
                     </div>
                     <div id="tableWrap" class="table-wrap">
-                        <table class="market-table">
+                        <table class="market-table" id="marketTable">
                             <thead>
                                 <tr>
                                     <th class="col-drag" scope="col"><span class="sr-only">Ordem</span></th>
@@ -707,6 +725,14 @@ App.views = App.views || {};
             });
             $('#filterText', el).addEventListener('input', debounce((event) => { filter.text = event.target.value.trim(); renderBody(); }, 150));
             $('#filterSignal', el).addEventListener('change', (event) => { filter.signal = event.target.value; renderBody(); });
+            $('#colMenu', el).addEventListener('click', (event) => {
+                const b = event.target.closest('[data-col]');
+                if (!b) return;
+                S.settings.marketCols = { ...cols(), [b.dataset.col]: !cols()[b.dataset.col] };
+                b.setAttribute('aria-pressed', S.settings.marketCols[b.dataset.col]);
+                store.save();
+                applyCols();
+            });
             $('#compareDetails', el).addEventListener('toggle', () => { if ($('#compareDetails', el).open) drawCompare(); });
             $('#compareChips', el).addEventListener('click', (event) => {
                 const b = event.target.closest('[data-pick]');

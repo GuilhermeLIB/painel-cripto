@@ -11,8 +11,8 @@ saúde do Aave v3 e manda mensagem no Telegram quando:
 
 Apps verificados:
 
-- Endereços 0x…: Uniswap v3 (Ethereum, Arbitrum, Base, Optimism, Polygon e
-  BNB Chain), PancakeSwap v3 (BNB Chain, Ethereum, Arbitrum e Base, incluindo
+- Endereços 0x…: Uniswap v3 (Ethereum, Arbitrum, Base, Optimism, Polygon,
+  BNB Chain e zkSync Era), PancakeSwap v3 (BNB Chain, Ethereum, Arbitrum e Base, incluindo
   posições em farm), Aerodrome Slipstream (Base, incluindo posições em staking)
   e Aave v3.
 - Endereços Solana: Orca (Whirlpools), Raydium (CLMM) e Meteora (DLMM).
@@ -46,9 +46,9 @@ Opcionais:
 
 | Nome | Para quê |
 |---|---|
-| `RPC_ETHEREUM`, `RPC_ARBITRUM`, `RPC_BASE`, `RPC_OPTIMISM`, `RPC_POLYGON`, `RPC_BNB`, `RPC_SOLANA` (segredos) | URL de RPC própria se os RPCs públicos falharem. Para a Meteora, um RPC próprio de Solana costuma ser necessário |
+| `RPC_ETHEREUM`, `RPC_ARBITRUM`, `RPC_BASE`, `RPC_OPTIMISM`, `RPC_POLYGON`, `RPC_BNB`, `RPC_ZKSYNC`, `RPC_SOLANA` (segredos) | URL de RPC própria se os RPCs públicos falharem. Para a Meteora, um RPC próprio de Solana costuma ser necessário |
 | `BLOCKSCOUT_KEY` (segredo) | chave gratuita do Blockscout; ajuda a achar posições do Aerodrome em staking |
-| `CHAINS` (em *Variables*) | redes a verificar, ex.: `arbitrum,base,bnb,solana` (padrão: todas) |
+| `CHAINS` (em *Variables*) | redes a verificar, ex.: `arbitrum,base,bnb,zksync,solana` (padrão: todas) |
 | `EDGE_PCT` (em *Variables*) | quanto da faixa conta como “perto da borda” (padrão 12) |
 | `HF_MIN` (em *Variables*) | fator de saúde mínimo do Aave (padrão 1.5) |
 

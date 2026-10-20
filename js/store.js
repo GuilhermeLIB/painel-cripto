@@ -20,6 +20,7 @@ window.App = window.App || {};
             marketPeriod: '30d',
             marketView: 'table',
             heatSize: 'volume',
+            marketCols: { spark: true, vsbtc: false, ath: false, target: false },
         },
         lists: [{ id: 'obs', name: 'Observando', color: LIST_COLORS[0], symbols: [...App.coins.DEFAULT_WATCHLIST] }],
         tabs: ['obs', ...SMART_TABS],

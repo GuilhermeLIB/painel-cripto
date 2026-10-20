@@ -44,10 +44,10 @@ App.views = App.views || {};
 
     App.views.alertas = {
         title: 'Alertas',
-        mount(el) {
+        mount(el, params = [], opts = {}) {
             root = el;
             el.innerHTML = html`
-                <header class="page-head"><div><h1>Alertas de preço</h1><p class="lede" id="notifyState"></p></div></header>
+                ${raw(opts.embedded ? '<p class="muted small" id="notifyState"></p>' : '<header class="page-head"><div><h1>Alertas de preço</h1><p class="lede" id="notifyState"></p></div></header>')}
                 <section class="panel">
                     <h2 class="panel-title">Novo alerta</h2>
                     <form id="newAlert" class="sim-form">

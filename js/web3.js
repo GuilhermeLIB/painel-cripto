@@ -102,6 +102,21 @@ window.App = window.App || {};
                 T('FDUSD', '0xc5f0f7b66764F6ec8C8Dff7BA683102295E16409', 18), T('wstETH', '0x26c5e01524d2E6280A48F2c50fF6De7e52E9611C', 18),
             ],
         },
+        zksync: {
+            id: 324, name: 'zkSync Era', short: 'ZK', native: 'ETH', color: '#4E529A', llama: 'era',
+            rpcs: ['https://mainnet.era.zksync.io', 'https://zksync.drpc.org'],
+            // O Multicall3 no zkSync Era fica num endereço próprio (a rede usa outro modelo de deploy).
+            multicall: '0xF9cda624FBC7e059355ce98a31693d299FACd963',
+            blockscout: null, explorer: 'https://explorer.zksync.io',
+            aavePool: '0x78e30497a3c7527d953c6B1E3541b021A98Ac43c',
+            dexes: [UNI('0x0616e5762c1E7Dc3723c50663dF10a162D690a86', '0x8FdA5a7a8dCA67BBcDd10F02Fa0649A937215422')],
+            tokens: [
+                T('WETH', '0x5AEa5775959fBC2557Cc8789bC1bf90A239D9a91', 18), T('USDC', '0x1d17CBcF0D6D143135aE902365D2E5e2A16538D4', 6),
+                T('USDT', '0x493257fD37EDB34451f62EDf8D2a0C418852bA4C', 6), T('ZK', '0x5A7d6b2F92C77FAD6CCaBd7EE0624E64907Eaf3E', 18),
+                T('wstETH', '0x703b52F2b28fEbcB60E1372858AF5b18849FE867', 18), T('weETH', '0xc1Fa6E2E8667d9bE0Ca938a54c7E0285E9Df924a', 18),
+                T('sUSDe', '0xAD17Da2f6Ac76746EF261E835C50b2651ce36DA8', 18),
+            ],
+        },
         solana: {
             id: 'solana', name: 'Solana', short: 'SOL', native: 'SOL', color: '#14F195', llama: 'solana', solana: true,
             rpcs: ['https://solana-rpc.publicnode.com', 'https://api.mainnet-beta.solana.com'],
@@ -110,6 +125,8 @@ window.App = window.App || {};
     };
 
     const EVM_CHAINS = Object.keys(CHAINS).filter((k) => !CHAINS[k].solana);
+    // Ensina à DefiLlama os contratos conhecidos (para preço de tokens fora da Binance).
+    setTimeout(() => Object.entries(CHAINS).forEach(([k, c]) => (c.tokens ?? []).forEach((t) => App.llama?.learn(t.symbol, k, t.address))), 0);
     const isSolanaAddress = (value) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(value).trim()) && !/^0x/i.test(String(value).trim());
 
     // Tokens "de golpe" (nome é um site ou um convite para resgatar prêmios): posições com eles são ignoradas.
@@ -196,7 +213,7 @@ window.App = window.App || {};
         for (let i = 0; i < calls.length; i += 120) {
             const chunk = calls.slice(i, i + 120);
             const data = I.mc.encodeFunctionData('aggregate3', [chunk.map((c) => ({ target: c.target, allowFailure: true, callData: c.data }))]);
-            const raw = await rpc(chainKey, 'eth_call', [{ to: MULTICALL3, data }, 'latest']);
+            const raw = await rpc(chainKey, 'eth_call', [{ to: CHAINS[chainKey].multicall ?? MULTICALL3, data }, 'latest']);
             const [results] = I.mc.decodeFunctionResult('aggregate3', raw);
             results.forEach((r) => out.push(r.success && r.returnData !== '0x' ? r.returnData : null));
         }
@@ -390,8 +407,8 @@ window.App = window.App || {};
         const factoryAbi = slip ? I.factorySlip : I.factory;
         const poolRaw = await multicall(chainKey, active.map((p) => ({ target: dex.factory, data: factoryAbi.encodeFunctionData('getPool', [p.token0, p.token1, p.feeOrSpacing]) })));
         const pools = poolRaw.map((r) => (r ? factoryAbi.decodeFunctionResult('getPool', r)[0] : null));
-        const slotRaw = await multicall(chainKey, pools.map((pool) => ({ target: pool ?? MULTICALL3, data: I.pool.encodeFunctionData('slot0', []) })));
-        const feeRaw = slip ? await multicall(chainKey, pools.map((pool) => ({ target: pool ?? MULTICALL3, data: I.pool.encodeFunctionData('fee', []) }))) : [];
+        const slotRaw = await multicall(chainKey, pools.map((pool) => ({ target: pool ?? (CHAINS[chainKey].multicall ?? MULTICALL3), data: I.pool.encodeFunctionData('slot0', []) })));
+        const feeRaw = slip ? await multicall(chainKey, pools.map((pool) => ({ target: pool ?? (CHAINS[chainKey].multicall ?? MULTICALL3), data: I.pool.encodeFunctionData('fee', []) }))) : [];
         const infos = await tokenInfo(chainKey, [...new Set(active.flatMap((p) => [p.token0, p.token1]))]);
         const result = active.map((p, i) => {
             if (!slotRaw[i]) return { ...p, error: true };
@@ -463,6 +480,7 @@ window.App = window.App || {};
             const more = await readKnownTokens(chainKey, address, extra).catch(() => []);
             more.filter((t) => !known.has(t.address.toLowerCase())).forEach((t) => tokens.push(t));
         }
+        tokens.forEach((t) => { if (t.reputation === 'ok') App.llama?.learn(t.symbol, chainKey, t.address); });
         result.tokens = tokens.map((t) => ({
             ...t,
             amount: Number(E.formatUnits(BigInt(t.raw), t.decimals)),
@@ -580,6 +598,7 @@ window.App = window.App || {};
             const sym = known?.symbol ?? window.SolanaCore.KNOWN_MINTS[t.mint];
             return { address: t.mint, symbol: sym ?? `${t.mint.slice(0, 4)}…${t.mint.slice(-4)}`, name: sym ?? 'Token sem preço', decimals: t.decimals, raw: t.raw, amount: t.amount, rate: null, reputation: sym ? 'ok' : 'unknown', kind: 'token', chain: 'solana' };
         });
+        tokens.forEach((t) => { if (t.reputation === 'ok') App.llama?.learn(t.symbol, 'solana', t.address); });
         const uni = res.positions.map((p) => ({ ...p, symbol0: symbolOf(p.token0), symbol1: symbolOf(p.token1) }));
         if (res.closedCount) uni.push({ closedCount: res.closedCount, dex: 'Orca/Raydium' });
         return { chain: 'solana', native: res.native, tokens, aave: null, uni, errors: res.errors, discovery: 'rpc' };

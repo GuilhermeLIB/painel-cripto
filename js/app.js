@@ -61,6 +61,14 @@ window.App = window.App || {};
             const [quotes, fx] = await Promise.all([App.api.tickers(symbols), App.api.fxNow()]);
             Object.assign(live.prices, quotes);
             live.fx = fx;
+            // Criptos sem par na Binance: preço pela DefiLlama (sem variação de 24h ao vivo).
+            const missing = symbols.filter((s) => !quotes[s] && App.llama?.refOf(s));
+            if (missing.length) {
+                App.llama.currentPrices(missing).then((prices) => {
+                    Object.entries(prices).forEach(([s, price]) => { live.prices[s] = { ...live.prices[s], price, source: 'defillama' }; });
+                    bus.emit('prices', live.prices);
+                }).catch(() => {});
+            }
             live.fxAt = Date.now();
             bus.emit('prices', live.prices);
             checkAlerts();
@@ -89,7 +97,7 @@ window.App = window.App || {};
     }
     App.money = money;
     App.signedMoney = signedMoney;
-    App.priceOf = (symbol) => live.prices[symbol]?.price ?? null;
+    App.priceOf = (symbol) => live.prices[symbol]?.price ?? App.llama?.priceCache[String(symbol).toUpperCase()] ?? null;
 
     // ---------- Alertas ----------
     let notifyAsked = false;
@@ -136,8 +144,8 @@ window.App = window.App || {};
 
     function parseRoute() {
         const parts = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
-        const name = parts[0] || 'mercado';
-        return { name: views[name] ? name : 'mercado', params: parts.slice(1).map(decodeURIComponent) };
+        const name = parts[0] || 'inicio';
+        return { name: views[name] ? name : 'inicio', params: parts.slice(1).map(decodeURIComponent) };
     }
 
     function route() {
@@ -148,7 +156,10 @@ window.App = window.App || {};
         el.innerHTML = '';
         el.dataset.view = name;
         current = { name, view };
-        $$('.nav-item').forEach((a) => a.classList.toggle('is-active', a.dataset.route === name));
+        // Telas de detalhe acendem a seção a que pertencem.
+        const section = { ativo: 'mercado', web3: 'patrimonio', carteira: 'aportes', alertas: 'config' }[name] ?? name;
+        $$('.nav-item').forEach((a) => a.classList.toggle('is-active', a.dataset.route === section));
+        $('#configOpen')?.classList.toggle('is-active', section === 'config');
         document.title = `${view.title ?? 'Cripto'} · Painel Cripto`;
         view.mount(el, params);
         el.focus({ preventScroll: true });
@@ -192,6 +203,13 @@ window.App = window.App || {};
             items = searchIndex.filter((c) => c.symbol.includes(q) || App.coins.meta(c.symbol).name.toUpperCase().includes(q));
             items.sort((a, b) => (b.symbol === q) - (a.symbol === q) || (b.symbol.startsWith(q)) - (a.symbol.startsWith(q)));
         }
+        // Tokens conhecidos fora da Binance (aprendidos das carteiras e pools) entram na busca.
+        if (q) {
+            const extra = Object.keys(JSON.parse(localStorage.getItem('llama:refs') || '{}'))
+                .filter((s) => s.includes(q) && !searchIndex.some((c) => c.symbol === s))
+                .map((s) => ({ symbol: s, price: App.priceOf(s), quoteVolume: 0, llama: true }));
+            items = [...items, ...extra];
+        }
         items = items.slice(0, 40);
         if (!searchIndex.length) return;
         if (!items.length) {
@@ -205,8 +223,8 @@ window.App = window.App || {};
             const tag = dlg.dataset.mode === 'add' ? (inTarget ? 'Já está' : 'Adicionar') : dlg.dataset.mode === 'pick' ? 'Escolher' : 'Abrir';
             return html`<li role="option" class="search-item${i === 0 ? ' is-focus' : ''}" data-symbol="${c.symbol}" aria-selected="${i === 0}">
                 ${raw(App.coins.avatar(c.symbol, 28))}
-                <span class="search-name"><strong>${c.symbol}</strong><span>${m.name !== c.symbol ? m.name : 'Par USDT'}</span></span>
-                <span class="search-price">${fmt.money(c.price)}</span>
+                <span class="search-name"><strong>${c.symbol}</strong><span>${c.llama ? 'Fora da Binance · preço DefiLlama' : (m.name !== c.symbol ? m.name : 'Par USDT')}</span></span>
+                <span class="search-price">${c.price ? fmt.money(c.price) : ''}</span>
                 <span class="search-tag">${tag}</span>
             </li>`;
         }).join('');

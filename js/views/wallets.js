@@ -12,6 +12,7 @@ App.views = App.views || {};
     const results = App.walletResults = App.walletResults || new Map();
     const loading = new Set();
     let root = null;
+    let sroot = null;
     let offs = [];
     let open = new Set();
 
@@ -25,6 +26,7 @@ App.views = App.views || {};
         render();
         try {
             const res = await W3().readWallet(wallet);
+            notifyRangeChanges(wallet, results.get(walletId), res);
             const prev = (S.walletSnapshots[walletId] ?? []).slice(-1)[0];
             res.prev = prev ?? null;
             results.set(walletId, res);
@@ -39,6 +41,22 @@ App.views = App.views || {};
         render();
     }
     App.refreshWallet = refresh;
+
+    // Avisa (aviso na tela e notificação do navegador) quando uma pool sai da faixa entre duas leituras.
+    function notifyRangeChanges(wallet, before, after) {
+        if (!before?.parts) return;
+        const key = (p, u) => `${p.chain}:${u.dex}:${u.id}`;
+        const wasIn = new Set();
+        before.parts.forEach((p) => p.uni?.forEach((u) => { if (u.symbol0 && u.inRange) wasIn.add(key(p, u)); }));
+        after.parts?.forEach((p) => p.uni?.forEach((u) => {
+            if (!u.symbol0 || u.inRange || !wasIn.has(key(p, u))) return;
+            const text = `${u.symbol0}/${u.symbol1} saiu da faixa (${wallet.name} · ${W3().CHAINS[p.chain]?.name ?? p.chain})`;
+            toast(text, 'down', 9000);
+            if ('Notification' in window && Notification.permission === 'granted') {
+                try { new Notification('Pool fora da faixa', { body: text }); } catch { /* ignorado */ }
+            }
+        }));
+    }
 
     function refreshAll() {
         S.wallets.forEach((w) => refresh(w.id));
@@ -253,6 +271,7 @@ App.views = App.views || {};
     }
 
     function renderReconcile() {
+        if (!root) return;
         const el = $('#w3Reconcile', root);
         const rows = reconcile();
         if (!rows.length || !S.wallets.some((w) => results.get(w.id)?.lines)) { el.hidden = true; return; }
@@ -325,24 +344,24 @@ App.views = App.views || {};
     // ---------- Configurações ----------
     function renderSettings() {
         const st = S.web3Settings;
-        $('#w3Rpc', root).innerHTML = Object.entries(App.web3.CHAINS).map(([k, c]) => html`<label>${c.name}<input class="input input-small" data-rpc="${k}" placeholder="${c.rpcs[0]}" value="${st.rpc?.[k] ?? ''}" autocomplete="off" spellcheck="false"></label>`).join('');
-        $('#w3Key', root).value = st.blockscoutKey ?? '';
-        $('#w3Custom', root).innerHTML = (st.customTokens ?? []).length
+        $('#w3Rpc', sroot).innerHTML = Object.entries(App.web3.CHAINS).map(([k, c]) => html`<label>${c.name}<input class="input input-small" data-rpc="${k}" placeholder="${c.rpcs[0]}" value="${st.rpc?.[k] ?? ''}" autocomplete="off" spellcheck="false"></label>`).join('');
+        $('#w3Key', sroot).value = st.blockscoutKey ?? '';
+        $('#w3Custom', sroot).innerHTML = (st.customTokens ?? []).length
             ? st.customTokens.map((t, i) => html`<li><span>${raw(chainBadge(t.chain))} <strong>${t.symbol}</strong> <span class="muted mono-addr">${App.web3.shortAddress(t.address)}</span></span><button class="icon-btn" type="button" data-rm-token="${i}" aria-label="Remover ${t.symbol}">✕</button></li>`).join('')
             : '<li class="muted">Nenhum token extra.</li>';
-        $('#w3TokChain', root).innerHTML = App.web3.EVM_CHAINS.map((k) => html`<option value="${k}">${App.web3.CHAINS[k].name}</option>`).join('');
+        $('#w3TokChain', sroot).innerHTML = App.web3.EVM_CHAINS.map((k) => html`<option value="${k}">${App.web3.CHAINS[k].name}</option>`).join('');
     }
 
     async function addCustomToken() {
-        const chain = $('#w3TokChain', root).value;
-        const address = $('#w3TokAddr', root).value.trim();
+        const chain = $('#w3TokChain', sroot).value;
+        const address = $('#w3TokAddr', sroot).value.trim();
         if (!App.web3.isAddress(address)) { toast('Endereço do contrato inválido.', 'bad'); return; }
         try {
             const info = (await App.web3.tokenInfo(chain, [address]))[address.toLowerCase()];
             if (!info || info.symbol === '?') throw new Error('não parece um token ERC-20');
             S.web3Settings.customTokens = [...(S.web3Settings.customTokens ?? []), { chain, address, symbol: info.symbol, decimals: info.decimals }];
             store.commit('web3');
-            $('#w3TokAddr', root).value = '';
+            $('#w3TokAddr', sroot).value = '';
             toast(`${info.symbol} adicionado. Atualize as carteiras para ler o saldo.`, 'up');
             renderSettings();
         } catch (error) {
@@ -392,42 +411,48 @@ App.views = App.views || {};
         }
     }
 
-    App.views.web3 = {
-        title: 'Web3',
+    const SETTINGS_MARKUP = `
+        <p class="muted small">Os RPCs públicos podem limitar acessos. Se uma rede falhar com frequência, cole aqui uma URL de RPC sua (Alchemy, Helius, Infura etc.); ela fica salva só neste navegador.</p>
+        <div id="w3Rpc" class="w3-rpc"></div>
+        <label class="w3-key">Chave da API do Blockscout (opcional, gratuita)<input id="w3Key" class="input input-small" type="password" autocomplete="off" spellcheck="false" placeholder="Usada se a descoberta de tokens sem chave deixar de funcionar"></label>
+        <h3 class="w3-h3">Tokens extras</h3>
+        <p class="muted small">Para tokens que não aparecem sozinhos. Cole o endereço do contrato.</p>
+        <div class="inline-form"><select id="w3TokChain" class="input input-small"></select><input id="w3TokAddr" class="input input-small" placeholder="0x… do contrato" autocomplete="off" spellcheck="false"><button class="btn btn-small" type="button" data-w3="add-token">Adicionar</button></div>
+        <ul id="w3Custom" class="w3-custom"></ul>`;
+
+    // Configurações de leitura (RPCs, chave e tokens extras), exibidas na tela de Configurações.
+    App.w3Settings = {
         mount(el) {
-            root = el;
-            el.innerHTML = html`
-                <header class="page-head">
-                    <div>
-                        <h1>Carteiras Web3</h1>
-                        <p class="lede">Leitura pública pelo endereço (0x… ou Solana): nenhuma conexão de carteira, nenhuma assinatura. Nunca digite sua frase-semente ou chave privada aqui.</p>
-                    </div>
-                    <div class="toolbar">
-                        <button class="btn" type="button" data-w3="refresh-all" ${S.wallets.length ? '' : 'disabled'}>Atualizar todas</button>
-                        <button class="btn btn-primary" type="button" data-w3="add">Adicionar carteira</button>
-                    </div>
-                </header>
-                <section class="panel pf-hero" id="w3Summary"></section>
-                <div id="w3List" class="w3-list"></div>
-                <section class="panel" id="w3Reconcile" hidden>
-                    <h2 class="panel-title">On-chain × registrado na Carteira</h2>
-                    <p class="muted small">Soma de todas as carteiras por ativo (ETH inclui WETH e stETH; depósitos no Aave somam, dívidas subtraem) comparada às compras registradas.</p>
-                    <div class="table-wrap"><table class="data-table"><thead><tr><th>Ativo</th><th class="col-num">On-chain</th><th class="col-num">Registrado</th><th class="col-num">Diferença</th></tr></thead><tbody id="w3RecBody"></tbody></table></div>
-                </section>
-                <details class="panel w3-settings">
-                    <summary><h2 class="panel-title">Configurações de leitura</h2></summary>
-                    <p class="muted small">Os RPCs públicos podem limitar acessos. Se uma rede falhar com frequência, cole aqui uma URL de RPC sua (Alchemy, Infura etc.); ela fica salva só neste navegador.</p>
-                    <div id="w3Rpc" class="w3-rpc"></div>
-                    <label class="w3-key">Chave da API do Blockscout (opcional, gratuita)<input id="w3Key" class="input input-small" type="password" autocomplete="off" spellcheck="false" placeholder="Usada se a descoberta de tokens sem chave deixar de funcionar"></label>
-                    <h3 class="w3-h3">Tokens extras</h3>
-                    <p class="muted small">Para tokens que não aparecem sozinhos. Cole o endereço do contrato.</p>
-                    <div class="inline-form"><select id="w3TokChain" class="input input-small"></select><input id="w3TokAddr" class="input input-small" placeholder="0x… do contrato" autocomplete="off" spellcheck="false"><button class="btn btn-small" type="button" data-w3="add-token">Adicionar</button></div>
-                    <ul id="w3Custom" class="w3-custom"></ul>
-                </details>`;
-            wireWalletDialog();
+            sroot = el;
+            el.innerHTML = SETTINGS_MARKUP;
             el.addEventListener('click', onClick);
             el.addEventListener('change', onChange);
             renderSettings();
+        },
+        unmount() { sroot = null; },
+    };
+
+    App.views.web3 = {
+        title: 'Carteiras on-chain',
+        mount(el, params = [], opts = {}) {
+            root = el;
+            const actions = html`<div class="toolbar">
+                <button class="btn btn-small" type="button" data-w3="refresh-all" ${S.wallets.length ? '' : 'disabled'}>Atualizar</button>
+                <button class="btn btn-small" type="button" data-w3="add">Adicionar carteira</button>
+            </div>`;
+            el.innerHTML = (opts.embedded
+                ? html`<div class="section-head"><div><h2>Carteiras on-chain</h2><p class="muted small">Leitura pública pelo endereço, sem conectar carteira. Nunca digite frase-semente ou chave privada.</p></div>${raw(actions)}</div>`
+                : html`<header class="page-head"><div><h1>Carteiras on-chain</h1><p class="lede">Leitura pública pelo endereço (0x… ou Solana): nenhuma conexão de carteira, nenhuma assinatura.</p></div>${raw(actions)}</header>`)
+                + html`
+                <section class="panel pf-hero" id="w3Summary"></section>
+                <div id="w3List" class="w3-list"></div>
+                <details class="panel fold" id="w3Reconcile" hidden>
+                    <summary><span class="panel-title">Conferir: on-chain × registrado</span><span class="muted small">Encontre compras que faltam lançar</span></summary>
+                    <p class="muted small">Soma de todas as carteiras por ativo (ETH inclui WETH e stETH; depósitos no Aave somam, dívidas subtraem) comparada às compras registradas.</p>
+                    <div class="table-wrap"><table class="data-table"><thead><tr><th>Ativo</th><th class="col-num">On-chain</th><th class="col-num">Registrado</th><th class="col-num">Diferença</th></tr></thead><tbody id="w3RecBody"></tbody></table></div>
+                </details>`;
+            wireWalletDialog();
+            el.addEventListener('click', onClick);
             render();
             // Lê automaticamente as carteiras sem leitura recente (mais de 5 minutos).
             S.wallets.forEach((w) => {
@@ -447,4 +472,5 @@ App.views = App.views || {};
             root = null;
         },
     };
+    App.openWalletDialog = (id) => { wireWalletDialog(); openWalletDialog(id); };
 })(window.App);

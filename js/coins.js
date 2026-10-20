@@ -37,6 +37,7 @@ window.App = window.App || {};
         AAVE: { name: 'Aave', color: '#B6509E' },
         FIL: { name: 'Filecoin', color: '#0090FF' },
         EIGEN: { name: 'EigenLayer', color: '#7B61FF' },
+        ZK: { name: 'ZKsync', color: '#4E529A' },
         ENA: { name: 'Ethena', color: '#9AA3B5' },
         USDC: { name: 'USD Coin', color: '#2775CA' },
         USDT: { name: 'Tether', color: '#26A17B' },

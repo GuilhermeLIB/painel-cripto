@@ -21,6 +21,7 @@ App.views = App.views || {};
     let selected = 'eq';
     let gasCache = { at: 0, data: null };
     let discovering = false;
+    let pendingRemount = null;
 
     const under = (s) => App.web3.underlying(s);
     const isStable = (s) => under(s) === 'USD';
@@ -42,15 +43,28 @@ App.views = App.views || {};
         return pa && pb ? pa / pb : null;
     }
 
+    // Fechamentos diários de uma cripto: Binance e, se não houver par lá, DefiLlama.
+    async function closesOf(sym, days = 200) {
+        try {
+            return (await App.api.klines(sym, '1d', days)).map((r) => ({ time: r.time, close: r.close }));
+        } catch (error) {
+            const alt = await App.llama?.dailyCloses(sym, days);
+            if (alt?.length) return alt.map((r) => ({ time: Math.floor(r.time / 86400) * 86400, close: r.close }));
+            throw error;
+        }
+    }
+
     async function pairCloses(a, b) {
         const ua = under(a);
         const ub = under(b);
         if (ua === ub) return null;
-        if (ub === 'USD') return (await App.api.klines(ua, '1d', 200)).map((r) => r.close);
-        if (ua === 'USD') return (await App.api.klines(ub, '1d', 200)).map((r) => 1 / r.close);
-        const [ra, rb] = await Promise.all([App.api.klines(ua, '1d', 200), App.api.klines(ub, '1d', 200)]);
-        const mb = new Map(rb.map((r) => [r.time, r.close]));
-        return ra.filter((r) => mb.has(r.time)).map((r) => r.close / mb.get(r.time));
+        if (ub === 'USD') return (await closesOf(ua)).map((r) => r.close);
+        if (ua === 'USD') return (await closesOf(ub)).map((r) => 1 / r.close);
+        {
+            const [ra, rb] = await Promise.all([closesOf(ua), closesOf(ub)]);
+            const mb = new Map(rb.map((r) => [r.time, r.close]));
+            return ra.filter((r) => mb.has(r.time)).map((r) => r.close / mb.get(r.time));
+        }
     }
 
     function pairType(a, b) {
@@ -170,6 +184,7 @@ App.views = App.views || {};
     }
 
     function renderPlanner() {
+        if (!root || !$('#plOut', root)) return;
         const f = S.poolForm;
         const el = $('#plOut', root);
         if (!calc) { el.innerHTML = '<p class="muted">Calculando…</p>'; return; }
@@ -248,6 +263,7 @@ App.views = App.views || {};
     }
 
     async function renderGas(force = false) {
+        if (!root || !$('#plGas', root)) { await gasTable(force).catch(() => null); return; }
         const el = $('#plGas', root);
         el.innerHTML = '<p class="muted">Consultando o gás de cada rede…</p>';
         const rows = await gasTable(force);
@@ -333,12 +349,13 @@ App.views = App.views || {};
 
     const volCache = new Map();
     async function renderMonitor() {
+        if (!root || !$('#plMon', root)) return;
         const el = $('#plMon', root);
         const list = monitored();
         const hasWallets = S.wallets.length;
         if (!list.length) {
-            el.innerHTML = html`<p class="muted">${hasWallets ? 'Nenhuma posição de pool encontrada nas carteiras lidas nem no diário.' : 'Cadastre carteiras na aba Web3 para monitorar pools on-chain, ou salve uma pool no diário a partir do planejador.'}</p>
-                ${raw(hasWallets ? '<button class="btn btn-small" type="button" data-pl="read">Ler carteiras agora</button>' : '')}`;
+            el.innerHTML = html`<div class="empty-state"><p>${hasWallets ? 'Nenhuma posição de pool encontrada nas suas carteiras nem no diário.' : 'Cadastre suas carteiras em Configurações para acompanhar as pools on-chain, ou planeje uma pool e salve no diário.'}</p>
+                <div class="toolbar">${raw(hasWallets ? '<button class="btn btn-small" type="button" data-pl="read">Ler carteiras agora</button>' : '<a class="btn btn-small" href="#/config">Cadastrar carteira</a>')}<a class="btn btn-small btn-primary" href="#/pools/planejar">Planejar uma pool</a><a class="btn btn-small btn-ghost" href="#/pools/explorar">Explorar pools</a></div></div>`;
             return;
         }
         const gas = gasCache.data ?? [];
@@ -417,6 +434,7 @@ App.views = App.views || {};
     }
 
     function renderJournal() {
+        if (!root || !$('#plJournal', root)) return;
         const el = $('#plJournal', root);
         if (!S.pools.length) { el.innerHTML = '<p class="muted">Nenhuma pool no diário ainda. Planeje acima e clique em “Salvar no diário” quando montar.</p>'; return; }
         const rows = [...S.pools].sort((a, b) => (b.remountedAt ?? b.createdAt) - (a.remountedAt ?? a.createdAt));
@@ -439,6 +457,7 @@ App.views = App.views || {};
 
     // ---------- Alertas fora do painel ----------
     function renderTelegram() {
+        if (!root || !$('#plTg', root)) return;
         const addrs = S.wallets.map((w) => w.address).join(',');
         $('#plTg', root).innerHTML = html`
             <p>Uma tarefa agendada no seu repositório do GitHub confere as pools das carteiras a cada hora e manda mensagem no Telegram quando uma posição sai da faixa, chega perto da borda ou quando o fator de saúde do Aave cai. Funciona com o computador desligado. O passo a passo completo está no arquivo <strong>ALERTAS.md</strong> do projeto.</p>
@@ -448,12 +467,13 @@ App.views = App.views || {};
                 <li>No GitHub: Settings → Secrets and variables → Actions → crie os segredos <code>TELEGRAM_BOT_TOKEN</code>, <code>TELEGRAM_CHAT_ID</code> e <code>WALLETS</code>.</li>
                 <li>Na aba Actions do repositório, rode “Alertas de pools” manualmente uma vez para testar.</li>
             </ol>
-            ${raw(addrs ? html`<label class="w3-key">Valor para o segredo WALLETS (suas carteiras cadastradas)<span class="inline-form"><input class="input input-small mono-addr" readonly value="${addrs}"><button class="btn btn-small" type="button" data-pl="copy" data-text="${addrs}">Copiar</button></span></label>` : '<p class="muted small">Cadastre carteiras na aba Web3 para gerar o valor do segredo WALLETS.</p>')}
+            ${raw(addrs ? html`<label class="w3-key">Valor para o segredo WALLETS (suas carteiras cadastradas)<span class="inline-form"><input class="input input-small mono-addr" readonly value="${addrs}"><button class="btn btn-small" type="button" data-pl="copy" data-text="${addrs}">Copiar</button></span></label>` : '<p class="muted small">Cadastre carteiras em Configurações para gerar o valor do segredo WALLETS.</p>')}
             <p class="footnote">Os endereços ficam em segredos do GitHub, não no código público. O token do bot também. O GitHub pausa tarefas agendadas de repositórios sem nenhuma atividade por 60 dias; um commit qualquer reativa.</p>`;
     }
 
     // ---------- Formulário ----------
     function renderForm() {
+        if (!root || !$('#plForm', root)) return;
         const f = S.poolForm;
         const symbols = [...new Set([f.a, ...S.watchlist, 'ETH', 'BTC'])];
         const quotes = [...new Set([f.b, 'USDC', 'USDT', 'ETH', 'BTC'])];
@@ -529,18 +549,15 @@ App.views = App.views || {};
         if (act === 'plan') {
             Object.assign(S.poolForm, { a: btn.dataset.a, b: btn.dataset.b, chain: btn.dataset.chain, fee: Number(btn.dataset.fee), mode: 'two' });
             store.save();
-            renderForm();
-            recompute();
-            $('#plPlanner', root).scrollIntoView({ behavior: 'smooth' });
+            App.go('#/pools/planejar');
         }
         if (act === 'remount') {
             const p = S.pools.find((x) => x.id === btn.dataset.id);
             if (!p) return;
             Object.assign(S.poolForm, { a: p.a, b: p.b, chain: p.chain, fee: p.fee, mode: p.mode ?? 'two', capital: p.capitalUsd ?? p.capital });
-            $('#plOut', root).dataset.remount = p.id;
-            renderForm();
-            recompute();
-            $('#plPlanner', root).scrollIntoView({ behavior: 'smooth' });
+            store.save();
+            pendingRemount = p.id;
+            App.go('#/pools/planejar');
             toast('Ajuste a nova faixa e clique em “Salvar no diário” para registrar a remontagem.');
         }
         if (act === 'close') {
@@ -558,64 +575,64 @@ App.views = App.views || {};
         title: 'Pools',
         mount(el, params = []) {
             ensureState();
-            const tabs = (active) => html`<nav class="subtabs" aria-label="Seções de pools">
-                <a href="#/pools" class="${active === 'minhas' ? 'is-active' : ''}" ${raw(active === 'minhas' ? 'aria-current="page"' : '')}>Planejar e monitorar</a>
-                <a href="#/pools/descobrir" class="${active === 'descobrir' ? 'is-active' : ''}" ${raw(active === 'descobrir' ? 'aria-current="page"' : '')}>Descobrir pools</a>
+            const sub = params[0] === 'planejar' ? 'planejar' : (params[0] === 'explorar' || params[0] === 'descobrir') ? 'explorar' : 'minhas';
+            const tabs = html`<nav class="subtabs" aria-label="Seções de pools">
+                ${raw([['minhas', 'Minhas pools', '#/pools'], ['planejar', 'Planejar', '#/pools/planejar'], ['explorar', 'Explorar', '#/pools/explorar']].map(([k, label, href]) => html`<a href="${href}" class="${sub === k ? 'is-active' : ''}" ${raw(sub === k ? 'aria-current="page"' : '')}>${label}</a>`).join(''))}
             </nav>`;
-            if (params[0] === 'descobrir') {
+            const lede = { minhas: 'Suas posições de liquidez, o que precisa de atenção e o diário de montagens.', planejar: 'Escolha o par e o capital: o painel sugere faixas pela volatilidade real e mostra o custo em cada rede.', explorar: 'Onde está o volume, as taxas e o rendimento, por rede e por app.' }[sub];
+            const head = html`<header class="page-head"><div><h1>Pools</h1><p class="lede">${lede}</p></div></header>${raw(tabs)}`;
+            if (sub === 'explorar') {
                 discovering = true;
-                el.innerHTML = html`<header class="page-head"><div><h1>Pools</h1><p class="lede">Onde está o volume e as taxas, por rede e por app, para escolher onde montar.</p></div></header>${raw(tabs('descobrir'))}<div id="dsRoot" class="ds-root"></div>`;
+                el.innerHTML = head + '<div id="dsRoot" class="ds-root"></div>';
                 App.poolDiscover.mount($('#dsRoot', el));
                 return;
             }
             discovering = false;
             root = el;
-            App.extraSymbols = [...new Set([under(S.poolForm.a), under(S.poolForm.b), 'ETH', 'POL'].filter((s) => s !== 'USD'))];
+            App.extraSymbols = [...new Set([under(S.poolForm.a), under(S.poolForm.b), 'ETH', 'POL', 'BNB', 'SOL'].filter((s) => s !== 'USD'))];
             App.refreshPrices();
-            el.innerHTML = html`
-                <header class="page-head">
-                    <div><h1>Pools</h1><p class="lede">Planeje faixas pela volatilidade real do par, compare o custo nas redes e receba alertas para remontar.</p></div>
-                </header>
-                ${raw(tabs('minhas'))}
+            el.innerHTML = head + (sub === 'planejar' ? html`
                 <section class="panel" id="plPlanner">
                     <div class="panel-bar"><h2 class="panel-title">Montar uma pool</h2><button class="btn btn-small btn-primary" type="button" data-pl="save">Salvar no diário</button></div>
                     <div id="plForm" class="pl-form"></div>
                     <div id="plOut" class="pl-out"></div>
                 </section>
-                <section class="panel">
-                    <div class="panel-bar"><h2 class="panel-title">Comparar redes</h2><button class="btn btn-small btn-ghost" type="button" data-pl="gas">Atualizar gás</button></div>
+                <details class="panel fold">
+                    <summary><span class="panel-title">Custo em cada rede</span><span class="muted small">Gás para montar e remontar, com o seu capital</span></summary>
+                    <div class="toolbar"><button class="btn btn-small btn-ghost" type="button" data-pl="gas">Atualizar gás</button></div>
                     <div id="plGas"></div>
-                </section>
+                </details>` : html`
                 <section class="panel">
-                    <div class="panel-bar"><h2 class="panel-title">Monitoramento e alertas</h2><button class="btn btn-small btn-ghost" type="button" data-pl="read">Ler carteiras</button></div>
+                    <div class="panel-bar"><h2 class="panel-title">Monitoramento</h2><button class="btn btn-small btn-ghost" type="button" data-pl="read">Atualizar carteiras</button></div>
                     <div id="plMon" class="pl-mon"></div>
                 </section>
                 <section class="panel">
                     <h2 class="panel-title">Diário de pools</h2>
                     <div id="plJournal"></div>
                 </section>
-                <details class="panel w3-settings">
-                    <summary><h2 class="panel-title">Alertas no Telegram (com o painel fechado)</h2></summary>
-                    <div id="plTg"></div>
-                </details>`;
+                <p class="footnote">Alertas no Telegram com o painel fechado: veja em <a href="#/config">Configurações</a>.</p>`);
             el.addEventListener('click', onClick);
             el.addEventListener('input', onFormInput);
             el.addEventListener('change', onFormInput);
-            renderForm();
-            renderJournal();
-            renderTelegram();
-            renderMonitor();
-            renderGas().then(() => root && renderMonitor());
-            recompute();
-            if (S.wallets.some((w) => !App.walletResults?.get(w.id))) S.wallets.forEach((w) => { if (!App.walletResults?.get(w.id)) App.refreshWallet(w.id); });
+            if (sub === 'planejar') {
+                renderForm();
+                if (pendingRemount) { $('#plOut', el).dataset.remount = pendingRemount; pendingRemount = null; }
+                recompute();
+                $('#plGas', el).closest('details').addEventListener('toggle', () => renderGas());
+            } else {
+                renderJournal();
+                renderMonitor();
+                gasTable().then(() => root && renderMonitor()).catch(() => {});
+                if (S.wallets.some((w) => !App.walletResults?.get(w.id))) S.wallets.forEach((w) => { if (!App.walletResults?.get(w.id)) App.refreshWallet(w.id); });
+            }
             let lastMon = 0;
             offs = [
                 bus.on('pools', () => { renderJournal(); renderMonitor(); }),
                 bus.on('wallet-read', () => renderMonitor()),
-                bus.on('wallets', () => { renderTelegram(); renderMonitor(); }),
+                bus.on('wallets', () => renderMonitor()),
                 bus.on('prices', () => {
-                    if (!calc?.price && root) recompute();
-                    if (Date.now() - lastMon > 5000 && !root?.querySelector('#plForm')?.contains(document.activeElement)) { lastMon = Date.now(); renderMonitor(); }
+                    if (sub === 'planejar' && !calc?.price && root) recompute();
+                    if (sub === 'minhas' && Date.now() - lastMon > 5000) { lastMon = Date.now(); renderMonitor(); }
                 }),
             ];
         },

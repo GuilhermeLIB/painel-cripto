@@ -124,7 +124,7 @@ window.App = window.App || {};
         const last = r?.lines ? { usd: r.total, t: r.at } : snaps[snaps.length - 1];
         const delta = r?.lines && r.prev ? r.total - r.prev.usd : null;
         return html`<p class="mp-wallet"><span class="w3-dot" style="--wc:${w.color}"></span>Aportes em <strong>${w.name}</strong>${raw(last ? html` · saldo ${App.money(last.usd, { priv: true, digits: 2 })}${raw(delta !== null && Math.abs(delta) >= 0.01 ? html` <span class="delta-${toneOf(delta)}">(${App.signedMoney(delta, { priv: true })} desde a leitura anterior)</span>` : '')}` : '')}
-            <button class="link-btn" type="button" data-mp="wallet-refresh">${App.walletResults?.get(w.id) && !r?.error ? 'Ler de novo' : 'Ler saldo'}</button> · <a href="#/web3">Detalhes</a></p>`;
+            <button class="link-btn" type="button" data-mp="wallet-refresh">${App.walletResults?.get(w.id) && !r?.error ? 'Ler de novo' : 'Ler saldo'}</button> · <a href="#/patrimonio">Detalhes</a></p>`;
     }
 
     function monthLabel(key) {

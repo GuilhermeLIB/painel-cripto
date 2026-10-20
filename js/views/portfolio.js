@@ -117,6 +117,7 @@ App.views = App.views || {};
     // ---------- Render ----------
     function renderSummary(snap) {
         const el = $('#pfSummary', root);
+        if (!el) return;
         const open = result(snap.value, snap.cost, snap.costBrl);
         const realized = snap.realized;
         const totalValue = (open.value ?? 0) + (S.settings.currency === 'BRL' && App.live.fx ? realized * App.live.fx : realized);
@@ -152,6 +153,7 @@ App.views = App.views || {};
 
     function renderPlan(snap) {
         const el = $('#planCard', root);
+        if (!el) return;
         const next = nextContributionDate();
         const isToday = localIso(next) === localIso();
         const sug = suggestion(snap);
@@ -198,6 +200,7 @@ App.views = App.views || {};
 
     function renderPositions(snap) {
         const body = $('#posBody', root);
+        if (!body) return;
         if (!snap.open.length) {
             body.innerHTML = '<tr><td colspan="7" class="empty-cell">Nenhuma posição ainda. Registre sua primeira compra para começar.</td></tr>';
             return;
@@ -219,6 +222,7 @@ App.views = App.views || {};
     }
 
     function renderTransactions() {
+        if (!root || !$('#txBody', root)) return;
         const assets = [...new Set(S.transactions.map((t) => t.asset))].sort();
         const filter = $('#txFilter', root);
         filter.innerHTML = html`<option value="all">Todas as criptos</option>${raw(assets.map((a) => html`<option value="${a}" ${txFilter === a ? 'selected' : ''}>${a}</option>`).join(''))}`;
@@ -247,7 +251,7 @@ App.views = App.views || {};
     }
 
     async function renderEvolution() {
-        if (!root) return;
+        if (!root || !$('#evoChart', root)) return;
         const el = $('#evoChart', root);
         const note = $('#evoNote', root);
         if (!S.transactions.length) {
@@ -261,7 +265,13 @@ App.views = App.views || {};
         const firstDate = S.transactions.reduce((m, t) => (t.date < m ? t.date : m), localIso());
         const assets = [...new Set(S.transactions.map((t) => t.asset))];
         try {
-            const histories = await Promise.all(assets.map((a) => App.api.dailyHistory(a, firstDate).catch(() => [])));
+            const days = Math.ceil((Date.now() - Date.parse(firstDate)) / 86400000) + 2;
+            const histories = await Promise.all(assets.map((a) => App.api.dailyHistory(a, firstDate).catch(() => []).then(async (h) => {
+                if (h.length) return h;
+                // Sem par na Binance: fechamentos diários pela DefiLlama.
+                const alt = await App.llama?.dailyCloses(a, Math.min(days, 1500)).catch(() => null);
+                return (alt ?? []).map((c) => ({ day: new Date(Math.floor(c.time / 86400) * 86400000).toISOString().slice(0, 10), close: c.close }));
+            })));
             const fxStart = firstDate < '2019-01-01' ? '2019-01-01' : firstDate;
             const fxHist = S.settings.currency === 'BRL' ? await App.api.dailyHistory('USDTBRL', fxStart).catch(() => []) : [];
             if (!root) return;
@@ -345,6 +355,7 @@ App.views = App.views || {};
     }
 
     async function loadSignals() {
+        if (!root || !$('#planCard', root)) return;
         const assets = Object.keys(S.plan.targets).filter((a) => Number(S.plan.targets[a]) > 0);
         await Promise.all(assets.map(async (a) => {
             if (signals[a]) return;
@@ -397,7 +408,7 @@ App.views = App.views || {};
         const isToday = date === localIso();
         try {
             const [price, fx] = await Promise.all([
-                isToday && App.priceOf(asset) ? App.priceOf(asset) : App.api.closeOn(App.api.pair(asset), date),
+                isToday && App.priceOf(asset) ? App.priceOf(asset) : App.api.closeOn(App.api.pair(asset), date).catch(() => null).then((p) => p ?? App.llama?.priceOn(asset, date) ?? null),
                 isToday && App.live.fx ? App.live.fx : App.api.closeOn('USDTBRL', date),
             ]);
             if ($('#txAsset').value !== asset || $('#txDate').value !== date) return;
@@ -475,7 +486,7 @@ App.views = App.views || {};
         store.upsertTx({ id: txDraft.id || uid(), asset, type: txDraft.type, date, note: $('#txNote').value.trim(), walletId: $('#txWallet').value || null, ...c });
         $('#txDialog').close();
         toast(txDraft.id ? 'Operação atualizada.' : `${txDraft.type === 'buy' ? 'Compra' : 'Venda'} de ${asset} registrada.`, 'up');
-        if (location.hash.startsWith('#/carteira/novo')) history.replaceState(null, '', '#/carteira');
+        if (/^#\/(carteira|aportes)\/novo/.test(location.hash)) history.replaceState(null, '', '#/aportes');
     }
 
     function wireTxDialog() {
@@ -502,7 +513,7 @@ App.views = App.views || {};
         $('#txPrice').addEventListener('input', () => { $('#txPrice').dataset.auto = '0'; updateTxPreview(); });
         ['txAmount', 'txFee'].forEach((id) => $(`#${id}`).addEventListener('input', updateTxPreview));
         dlg.addEventListener('close', () => {
-            if (location.hash.startsWith('#/carteira/novo')) history.replaceState(null, '', '#/carteira');
+            if (/^#\/(carteira|aportes)\/novo/.test(location.hash)) history.replaceState(null, '', '#/aportes');
         });
     }
 
@@ -682,6 +693,7 @@ App.views = App.views || {};
 
     function renderLegacyBanner() {
         const el = $('#legacyBanner', root);
+        if (!el) return;
         const legacy = store.legacyLocalData();
         const already = S.transactions.some((t) => t.id.startsWith('legacy-'));
         if (!legacy || already) { el.hidden = true; return; }
@@ -694,141 +706,176 @@ App.views = App.views || {};
     }
 
     // ---------- Montagem ----------
-    App.views.carteira = {
-        title: 'Carteira',
-        mount(el, params) {
-            root = el;
-            el.innerHTML = html`
-                <header class="page-head">
-                    <div><h1>Carteira</h1><p class="lede">Suas posições, o plano de aportes e o histórico de compras e vendas.</p></div>
-                    <button class="btn btn-primary" type="button" data-act="new">Nova operação</button>
-                </header>
-                <div id="legacyBanner" class="banner" hidden></div>
-                <section class="panel pf-hero">
-                    <div id="pfSummary" class="pf-summary"></div>
-                    <div id="allocBar" class="alloc"></div>
-                </section>
-                <section class="panel mp-panel" id="monthlyPanel"></section>
-                <div class="pf-grid">
-                    <section class="panel" id="planCard"></section>
-                    <section class="panel evo-panel">
-                        <div class="panel-bar">
-                            <h2 class="panel-title">Evolução</h2>
-                            <div class="seg seg-soft" id="evoRange" role="group" aria-label="Período">
-                                <button type="button" data-range="6m" aria-pressed="${evoRange === '6m'}">6M</button>
-                                <button type="button" data-range="1y" aria-pressed="${evoRange === '1y'}">1A</button>
-                                <button type="button" data-range="all" aria-pressed="${evoRange === 'all'}">Tudo</button>
-                            </div>
-                        </div>
-                        <div class="chart-legend"><span><i style="background:var(--brand)"></i>Valor da carteira</span><span><i class="dashed"></i>Investido</span></div>
-                        <div id="evoChart" class="chart-evo"></div>
-                        <p id="evoNote" class="footnote"></p>
-                    </section>
+    // ---------- Montagem: duas telas a partir do mesmo módulo ----------
+    // "Aportes" é a ação (plano do mês, registrar, histórico); "Patrimônio" é o resultado
+    // (quanto vale, onde está, como evoluiu), juntando o registrado e as carteiras on-chain.
+    let mode = 'aportes';
+
+    function markupAportes() {
+        return html`
+            <header class="page-head">
+                <div><h1>Aportes</h1><p class="lede">O plano do mês, o que comprar nesta semana e o histórico de compras e vendas.</p></div>
+                <button class="btn btn-primary" type="button" data-act="new">Registrar operação</button>
+            </header>
+            <div id="legacyBanner" class="banner" hidden></div>
+            <section class="panel mp-panel" id="monthlyPanel"></section>
+            <section class="panel">
+                <div class="panel-bar">
+                    <h2 class="panel-title">Operações <span id="txCount" class="muted small"></span></h2>
+                    <div class="toolbar">
+                        <label class="sr-only" for="txFilter">Filtrar por cripto</label>
+                        <select id="txFilter" class="input input-small"></select>
+                        <button class="btn btn-small btn-ghost" type="button" data-act="csv">Exportar CSV</button>
+                    </div>
                 </div>
-                <section class="panel">
-                    <h2 class="panel-title">Posições</h2>
-                    <div class="table-wrap">
-                        <table class="data-table">
-                            <thead><tr><th>Cripto</th><th class="col-num">Preço médio</th><th class="col-num">Preço atual</th><th class="col-num">Valor</th><th class="col-num">Resultado</th><th class="col-num">Peso / alvo</th><th class="col-actions"><span class="sr-only">Ações</span></th></tr></thead>
-                            <tbody id="posBody"></tbody>
-                        </table>
-                    </div>
-                </section>
-                <section class="panel">
-                    <div class="panel-bar">
-                        <h2 class="panel-title">Operações <span id="txCount" class="muted small"></span></h2>
-                        <div class="toolbar">
-                            <label class="sr-only" for="txFilter">Filtrar por cripto</label>
-                            <select id="txFilter" class="input input-small"></select>
-                            <button class="btn btn-small" type="button" data-act="csv">Exportar CSV</button>
-                            <button class="btn btn-small" type="button" data-act="backup">Fazer backup</button>
-                            <label class="btn btn-small" for="importFile">Importar</label>
-                            <input id="importFile" type="file" accept="application/json,.json" hidden>
-                        </div>
-                    </div>
-                    <div class="table-wrap">
-                        <table class="data-table">
-                            <thead><tr><th>Data</th><th>Cripto</th><th>Tipo</th><th class="col-num">Quantidade</th><th class="col-num">Preço</th><th class="col-num">Total</th><th class="col-actions"><span class="sr-only">Ações</span></th></tr></thead>
-                            <tbody id="txBody"></tbody>
-                        </table>
-                    </div>
-                    <p class="footnote">Os dados ficam só neste navegador. Faça backup de vez em quando para não perder nada.</p>
-                </section>
-                <section class="panel">
-                    <h2 class="panel-title">Simulador de aportes</h2>
-                    <p class="muted">Quanto você teria hoje se tivesse aportado um valor fixo em reais desde uma data.</p>
-                    <form id="simForm" class="sim-form">
-                        <label>Cripto<select id="simAsset" class="input">${raw([...new Set([...S.watchlist, 'BTC'])].map((a) => html`<option>${a}</option>`).join(''))}</select></label>
-                        <label>Valor por aporte (R$)<input id="simAmount" class="input" type="number" min="1" step="1" value="${S.plan.budgetBrl || 200}"></label>
-                        <label>Frequência<select id="simFreq" class="input"><option value="weekly">Semanal</option><option value="monthly">Mensal</option><option value="daily">Diária</option></select></label>
-                        <label>Desde<input id="simStart" class="input" type="date" value="${App.util.addDays(localIso(), -365 * 2)}" max="${localIso()}"></label>
-                        <button class="btn btn-primary" type="submit">Simular</button>
-                    </form>
-                    <div id="simOut"></div>
-                </section>`;
+                <div class="table-wrap">
+                    <table class="data-table">
+                        <thead><tr><th>Data</th><th>Cripto</th><th>Tipo</th><th class="col-num">Quantidade</th><th class="col-num">Preço</th><th class="col-num">Total</th><th class="col-actions"><span class="sr-only">Ações</span></th></tr></thead>
+                        <tbody id="txBody"></tbody>
+                    </table>
+                </div>
+            </section>
+            <details class="panel fold">
+                <summary><span class="panel-title">Rebalancear por alvo</span><span class="muted small">Divide um aporte para levar a carteira à divisão desejada</span></summary>
+                <div id="planCard"></div>
+            </details>
+            <details class="panel fold">
+                <summary><span class="panel-title">Simulador de aportes</span><span class="muted small">Quanto você teria hoje aportando um valor fixo desde uma data</span></summary>
+                <form id="simForm" class="sim-form">
+                    <label>Cripto<select id="simAsset" class="input">${raw([...new Set([...S.watchlist, 'BTC'])].map((a) => html`<option>${a}</option>`).join(''))}</select></label>
+                    <label>Valor por aporte (R$)<input id="simAmount" class="input" type="number" min="1" step="1" value="${S.monthly?.budgetBrl ? Math.round(S.monthly.budgetBrl / 4) : 200}"></label>
+                    <label>Frequência<select id="simFreq" class="input"><option value="weekly">Semanal</option><option value="monthly">Mensal</option><option value="daily">Diária</option></select></label>
+                    <label>Desde<input id="simStart" class="input" type="date" value="${App.util.addDays(localIso(), -365 * 2)}" max="${localIso()}"></label>
+                    <button class="btn btn-primary" type="submit">Simular</button>
+                </form>
+                <div id="simOut"></div>
+            </details>`;
+    }
 
-            el.addEventListener('click', (event) => {
-                const act = event.target.closest('[data-act]')?.dataset.act;
-                if (act === 'new') openTx();
-                else if (act === 'plan') openPlan();
-                else if (act === 'execute') executeSuggestion();
-                else if (act === 'csv') exportCsv();
-                else if (act === 'backup') download(`backup-painel-cripto-${localIso()}.json`, store.exportData(), 'application/json');
-                const edit = event.target.closest('[data-edit]')?.dataset.edit;
-                if (edit) openTx({ id: edit });
-                const del = event.target.closest('[data-del]')?.dataset.del;
-                if (del) {
-                    const t = S.transactions.find((x) => x.id === del);
-                    if (t && window.confirm(`Apagar ${t.type === 'buy' ? 'compra' : 'venda'} de ${fmt.qty(t.qty)} ${t.asset} em ${fmt.date(t.date)}?`)) {
-                        store.removeTx(del);
-                        toast('Operação apagada.');
-                    }
+    function markupPatrimonio() {
+        // Sem compras registradas: mostra primeiro as carteiras on-chain e um convite curto,
+        // em vez de blocos vazios de posições e evolução.
+        if (!S.transactions.length) {
+            return html`
+            <header class="page-head">
+                <div><h1>Patrimônio</h1><p class="lede">Quanto vale e onde está: as carteiras on-chain e as compras que você registrar.</p></div>
+            </header>
+            <div id="onchainRoot" class="w3-embed"></div>
+            <section class="panel empty-state">
+                <h2 class="panel-title">Compras registradas</h2>
+                <p class="muted">Registrar as compras dá o preço médio, o resultado em reais e a evolução do patrimônio. Os aportes marcados no plano mensal já entram aqui automaticamente.</p>
+                <div class="toolbar"><a class="btn btn-small btn-primary" href="#/aportes">Ir para Aportes</a></div>
+            </section>`;
+        }
+        return html`
+            <header class="page-head">
+                <div><h1>Patrimônio</h1><p class="lede">Quanto vale, onde está e como evoluiu: o que você registrou e o que está nas carteiras on-chain.</p></div>
+            </header>
+            <section class="panel pf-hero">
+                <div id="pfSummary" class="pf-summary"></div>
+                <div id="allocBar" class="alloc"></div>
+            </section>
+            <section class="panel">
+                <h2 class="panel-title">Posições registradas</h2>
+                <div class="table-wrap">
+                    <table class="data-table">
+                        <thead><tr><th>Cripto</th><th class="col-num">Preço médio</th><th class="col-num">Preço atual</th><th class="col-num">Valor</th><th class="col-num">Resultado</th><th class="col-num">Peso / alvo</th><th class="col-actions"><span class="sr-only">Ações</span></th></tr></thead>
+                        <tbody id="posBody"></tbody>
+                    </table>
+                </div>
+            </section>
+            <section class="panel evo-panel">
+                <div class="panel-bar">
+                    <h2 class="panel-title">Evolução</h2>
+                    <div class="seg seg-soft" id="evoRange" role="group" aria-label="Período">
+                        <button type="button" data-range="6m" aria-pressed="${evoRange === '6m'}">6M</button>
+                        <button type="button" data-range="1y" aria-pressed="${evoRange === '1y'}">1A</button>
+                        <button type="button" data-range="all" aria-pressed="${evoRange === 'all'}">Tudo</button>
+                    </div>
+                </div>
+                <div class="chart-legend"><span><i style="background:var(--brand)"></i>Valor registrado</span><span><i class="dashed"></i>Investido</span></div>
+                <div id="evoChart" class="chart-evo"></div>
+                <p id="evoNote" class="footnote"></p>
+            </section>
+            <div id="onchainRoot" class="w3-embed"></div>`;
+    }
+
+    function mountView(el, params, which) {
+        root = el;
+        mode = which;
+        el.innerHTML = which === 'patrimonio' ? markupPatrimonio() : markupAportes();
+
+        el.addEventListener('click', (event) => {
+            const act = event.target.closest('[data-act]')?.dataset.act;
+            if (act === 'new') openTx();
+            else if (act === 'plan') openPlan();
+            else if (act === 'execute') executeSuggestion();
+            else if (act === 'csv') exportCsv();
+            const edit = event.target.closest('[data-edit]')?.dataset.edit;
+            if (edit) openTx({ id: edit });
+            const del = event.target.closest('[data-del]')?.dataset.del;
+            if (del) {
+                const t = S.transactions.find((x) => x.id === del);
+                if (t && window.confirm(`Apagar ${t.type === 'buy' ? 'compra' : 'venda'} de ${fmt.qty(t.qty)} ${t.asset} em ${fmt.date(t.date)}?`)) {
+                    store.removeTx(del);
+                    toast('Operação apagada.');
                 }
-            });
-            $('#txFilter', el).addEventListener('change', (e) => { txFilter = e.target.value; renderTransactions(); });
-            $('#importFile', el).addEventListener('change', async (e) => {
-                const [file] = e.target.files ?? [];
-                if (file) await importFile(file);
-                e.target.value = '';
-            });
-            $('#evoRange', el).addEventListener('click', (e) => {
-                const b = e.target.closest('button[data-range]'); if (!b) return;
-                evoRange = b.dataset.range;
-                $$('#evoRange button', el).forEach((x) => x.setAttribute('aria-pressed', x === b));
-                renderEvolution();
-            });
-            $('#simForm', el).addEventListener('submit', runSimulator);
-
-            wireTxDialog();
-            wirePlanDialog();
-            App.monthly.mount($('#monthlyPanel', el));
-            renderAll();
-            renderTransactions();
-            renderLegacyBanner();
+            }
+        });
+        $('#txFilter', el)?.addEventListener('change', (e) => { txFilter = e.target.value; renderTransactions(); });
+        $('#evoRange', el)?.addEventListener('click', (e) => {
+            const b = e.target.closest('button[data-range]'); if (!b) return;
+            evoRange = b.dataset.range;
+            $$('#evoRange button', el).forEach((x) => x.setAttribute('aria-pressed', x === b));
             renderEvolution();
-            loadSignals();
+        });
+        $('#simForm', el)?.addEventListener('submit', runSimulator);
+        $('#planCard', el)?.closest('details')?.addEventListener('toggle', () => { renderAll(); loadSignals(); });
 
-            const refreshEvo = App.util.debounce(renderEvolution, 400);
-            let lastLive = 0;
-            offs = [
-                bus.on('prices', () => { if (Date.now() - lastLive > 1500) { lastLive = Date.now(); renderAll(); } }),
-                bus.on('transactions', () => { renderAll(); renderTransactions(); renderLegacyBanner(); refreshEvo(); }),
-                bus.on('plan', () => renderAll()),
-                bus.on('settings', () => { renderAll(); renderTransactions(); refreshEvo(); }),
-                bus.on('theme', refreshEvo),
-            ];
+        wireTxDialog();
+        wirePlanDialog();
+        if ($('#monthlyPanel', el)) App.monthly.mount($('#monthlyPanel', el));
+        if ($('#onchainRoot', el)) App.views.web3.mount($('#onchainRoot', el), [], { embedded: true });
+        renderAll();
+        renderTransactions();
+        renderLegacyBanner();
+        renderEvolution();
 
-            if (params[0] === 'novo') openTx({ asset: (params[1] || '').toUpperCase() || undefined });
-        },
-        unmount() {
-            offs.forEach((off) => off());
-            offs = [];
-            App.monthly.unmount();
-            evoChart?.remove();
-            evoChart = null;
-            root = null;
-            if ($('#txDialog').open) $('#txDialog').close();
-            if ($('#planDialog').open) $('#planDialog').close();
-        },
-    };
+        const refreshEvo = App.util.debounce(renderEvolution, 400);
+        let lastLive = 0;
+        offs = [
+            bus.on('prices', () => { if (Date.now() - lastLive > 1500) { lastLive = Date.now(); renderAll(); } }),
+            bus.on('transactions', () => {
+                // Primeira compra registrada: a tela Patrimônio passa a mostrar posições e evolução.
+                if (mode === 'patrimonio' && !$('#posBody', root) && S.transactions.length) { App.go(location.hash); return; }
+                renderAll(); renderTransactions(); renderLegacyBanner(); refreshEvo();
+            }),
+            bus.on('plan', () => renderAll()),
+            bus.on('settings', () => { renderAll(); renderTransactions(); refreshEvo(); }),
+            bus.on('theme', refreshEvo),
+        ];
+
+        if (params[0] === 'novo') openTx({ asset: (params[1] || '').toUpperCase() || undefined });
+    }
+
+    function unmountView() {
+        offs.forEach((off) => off());
+        offs = [];
+        if (mode === 'aportes') App.monthly.unmount();
+        if (mode === 'patrimonio') App.views.web3.unmount();
+        evoChart?.remove();
+        evoChart = null;
+        root = null;
+        if ($('#txDialog').open) $('#txDialog').close();
+        if ($('#planDialog').open) $('#planDialog').close();
+    }
+
+    App.views.aportes = { title: 'Aportes', mount: (el, params) => mountView(el, params, 'aportes'), unmount: unmountView };
+    App.views.patrimonio = { title: 'Patrimônio', mount: (el, params) => mountView(el, params, 'patrimonio'), unmount: unmountView };
+    // Endereço antigo (#/carteira…) continua funcionando e abre Aportes.
+    App.views.carteira = App.views.aportes;
+    App.openTx = (prefill) => { wireTxDialog(); openTx(prefill); };
+    App.portfolioSnapshot = () => snapshot();
+    App.importBackupFile = importFile;
+    App.downloadBackup = () => download(`backup-painel-cripto-${localIso()}.json`, store.exportData(), 'application/json');
 })(window.App);

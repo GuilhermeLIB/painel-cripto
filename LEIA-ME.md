@@ -4,6 +4,15 @@ Painel para acompanhar qualquer cripto negociada contra USDT na Binance e
 controlar a carteira de aportes. Não precisa de servidor, instalação nem
 chave de API.
 
+## Organização
+
+- **Início:** resumo do dia (patrimônio, aporte da semana, o que precisa de atenção, mercado).
+- **Mercado:** listas e ranking; clicar numa cripto abre a Análise.
+- **Aportes:** plano mensal com o checklist da semana, operações, rebalanceamento por alvo e simulador.
+- **Patrimônio:** carteiras on-chain e compras registradas, evolução e conferência.
+- **Pools:** Minhas pools (monitoramento e diário), Planejar e Explorar.
+- **Configurações** (ícone de engrenagem): carteiras, alertas de preço, Telegram, fontes de dados e backup.
+
 ## Como abrir
 
 - **Direto do computador:** dê dois cliques em `index.html`. Para criar um
@@ -58,8 +67,8 @@ e o preço que estavam salvos.
 ## Carteiras Web3
 
 A aba **Web3** lê carteiras pelo endereço público, sem conectar nem assinar
-nada. Endereços 0x… são lidos em Ethereum, Arbitrum, Base, Optimism, Polygon e
-BNB Chain: tokens, gás, Aave v3 (com fator de saúde) e posições de liquidez da
+nada. Endereços 0x… são lidos em Ethereum, Arbitrum, Base, Optimism, Polygon,
+BNB Chain e zkSync Era: tokens, gás, Aave v3 (com fator de saúde) e posições de liquidez da
 Uniswap v3, PancakeSwap v3 (inclusive em farm) e Aerodrome (inclusive em
 staking). Endereços Solana: tokens e posições da Orca, Raydium e Meteora.
 
@@ -79,6 +88,12 @@ Em **Pools → Descobrir pools**, o painel mostra volume, taxas e liquidez por
 rede e por app (dados públicos do GeckoTerminal), destaques automáticos e um
 ranking filtrável; “Planejar” leva a pool escolhida para o planejador.
 
+A mesma subaba traz dados da **DefiLlama** (API gratuita, sem chave): fluxo de
+capital por rede (TVL e stablecoins em 7 e 30 dias), protocolos ganhando ou
+perdendo TVL, volume e taxas do app inteiro e o rendimento médio de 30 dias
+das pools, com histórico. Criptos sem par na Binance usam preço e histórico
+diário da DefiLlama na Análise, no planejador e na Carteira.
+
 Para receber alertas no Telegram com o painel fechado, veja **ALERTAS.md**.
 
 ## Estrutura
@@ -94,6 +109,7 @@ Para receber alertas no Telegram com o painel fechado, veja **ALERTAS.md**.
 - `js/lists.js`: listas manuais e automáticas.
 - `js/web3.js`: leitura on-chain (RPC, Multicall3, Aave, Uniswap, PancakeSwap, Aerodrome, preços).
 - `js/solana-core.js`: leitura de Solana (Orca, Raydium, Meteora), usada pelo painel e pelos alertas.
+- `js/llama.js`: DefiLlama (rendimentos, fluxo de capital, volume, taxas, preços).
 - `js/poolmath.js`: matemática de liquidez concentrada (faixas, depósito, perda impermanente).
 - `scripts/alertas-pools.mjs` e `.github/workflows/alertas-pools.yml`: alertas agendados no Telegram.
 - `js/views/`: telas Mercado, Análise, Carteira (com o plano mensal), Web3 e Alertas.
