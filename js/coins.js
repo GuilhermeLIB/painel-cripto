@@ -36,10 +36,16 @@ window.App = window.App || {};
         INJ: { name: 'Injective', color: '#25A3F2' },
         AAVE: { name: 'Aave', color: '#B6509E' },
         FIL: { name: 'Filecoin', color: '#0090FF' },
+        EIGEN: { name: 'EigenLayer', color: '#7B61FF' },
+        ENA: { name: 'Ethena', color: '#9AA3B5' },
+        USDC: { name: 'USD Coin', color: '#2775CA' },
+        USDT: { name: 'Tether', color: '#26A17B' },
+        DAI: { name: 'Dai', color: '#F5AC37' },
+        WBTC: { name: 'Wrapped Bitcoin', color: '#F09242' },
     };
 
     // Ícones do pacote cryptocurrency-icons (versão fixa). Os que não existem caem no avatar com a inicial.
-    const ICON_SET = new Set(['btc', 'eth', 'sol', 'bnb', 'xrp', 'ada', 'doge', 'avax', 'link', 'dot', 'trx', 'ltc', 'uni', 'atom', 'matic', 'xlm', 'bch', 'etc', 'aave', 'fil', 'hbar', 'shib', 'near', 'usdt']);
+    const ICON_SET = new Set(['btc', 'eth', 'sol', 'bnb', 'xrp', 'ada', 'doge', 'avax', 'link', 'dot', 'trx', 'ltc', 'uni', 'atom', 'matic', 'xlm', 'bch', 'etc', 'aave', 'fil', 'hbar', 'shib', 'near', 'usdt', 'usdc', 'dai', 'wbtc']);
     const ICON_BASE = 'https://cdn.jsdelivr.net/npm/cryptocurrency-icons@0.18.1/svg/color/';
 
     const DEFAULT_WATCHLIST = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'LINK', 'AVAX', 'DOT'];

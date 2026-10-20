@@ -199,5 +199,89 @@ window.App = window.App || {};
         };
     }
 
-    App.ind = { sma, rsi, macd, bollinger, pivots, volatility, analyze, RULES, BASE_VOL };
+    // Cruzamentos da SMA 50 com a SMA 200. O marcador fica no candle em que o cruzamento se confirma.
+    function crosses(data, fast = 50, slow = 200) {
+        if (data.length < slow + 1) return [];
+        const f = new Map(sma(data, fast).map((p) => [p.time, p.value]));
+        const sl = sma(data, slow);
+        const out = [];
+        for (let i = 1; i < sl.length; i += 1) {
+            const t0 = sl[i - 1].time;
+            const t1 = sl[i].time;
+            const d0 = f.get(t0) - sl[i - 1].value;
+            const d1 = f.get(t1) - sl[i].value;
+            if (d0 <= 0 && d1 > 0) out.push({ time: t1, type: 'golden', price: f.get(t1) });
+            else if (d0 >= 0 && d1 < 0) out.push({ time: t1, type: 'death', price: f.get(t1) });
+        }
+        return out;
+    }
+
+    // Retrações de Fibonacci do maior movimento da amostra: da mínima à máxima
+    // (alta, níveis medidos a partir do topo) ou da máxima à mínima (queda,
+    // níveis medidos a partir do fundo). Movimentos menores que 15% são ignorados.
+    function fibonacci(data) {
+        if (data.length < 120) return null;
+        let hi = 0;
+        let lo = 0;
+        data.forEach((d, i) => {
+            if (d.high > data[hi].high) hi = i;
+            if (d.low < data[lo].low) lo = i;
+        });
+        const high = data[hi].high;
+        const low = data[lo].low;
+        if ((high - low) / high < 0.15) return null;
+        const up = lo < hi;
+        return [0.236, 0.382, 0.5, 0.618, 0.786].map((r) => ({ ratio: r, price: up ? high - (high - low) * r : low + (high - low) * r, up }));
+    }
+
+    // Estatísticas do histórico diário: maior queda, recuperação, volatilidade e retornos mensais.
+    function stats(daily) {
+        if (!daily || daily.length < 30) return null;
+        let peak = daily[0].close;
+        let peakDay = daily[0].day;
+        let maxDd = 0;
+        let ddPeakDay = peakDay;
+        let ddTroughDay = peakDay;
+        daily.forEach((d) => {
+            if (d.close > peak) { peak = d.close; peakDay = d.day; }
+            const dd = (d.close - peak) / peak;
+            if (dd < maxDd) { maxDd = dd; ddPeakDay = peakDay; ddTroughDay = d.day; }
+        });
+        const peakPrice = daily.find((d) => d.day === ddPeakDay).close;
+        const recovered = daily.find((d) => d.day > ddTroughDay && d.close >= peakPrice);
+        const dayDiff = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86400000);
+        const ath = Math.max(...daily.map((d) => d.close));
+        const last = daily[daily.length - 1].close;
+        const rets = [];
+        for (let i = 1; i < daily.length; i += 1) rets.push(Math.log(daily[i].close / daily[i - 1].close));
+        const recent = rets.slice(-365);
+        const mean = recent.reduce((a, b) => a + b, 0) / recent.length;
+        const sd = Math.sqrt(recent.reduce((a, b) => a + (b - mean) ** 2, 0) / (recent.length - 1));
+        const yearAgo = daily[daily.length - 366];
+        const months = [];
+        let prevClose = daily[0].open;
+        let current = null;
+        daily.forEach((d) => {
+            const key = d.day.slice(0, 7);
+            if (!current || current.key !== key) {
+                if (current) { current.ret = (current.close / prevClose - 1) * 100; prevClose = current.close; months.push(current); }
+                current = { key, close: d.close };
+            } else current.close = d.close;
+        });
+        if (current) { current.ret = (current.close / prevClose - 1) * 100; current.partial = true; months.push(current); }
+        return {
+            maxDrawdown: maxDd * 100,
+            ddPeakDay,
+            ddTroughDay,
+            recoveryDays: recovered ? dayDiff(ddTroughDay, recovered.day) : null,
+            drawdownDays: dayDiff(ddPeakDay, ddTroughDay),
+            fromAth: (last / ath - 1) * 100,
+            annualVol: sd * Math.sqrt(365) * 100,
+            yearReturn: yearAgo ? (last / yearAgo.close - 1) * 100 : null,
+            firstDay: daily[0].day,
+            months,
+        };
+    }
+
+    App.ind = { sma, rsi, macd, bollinger, pivots, volatility, analyze, crosses, fibonacci, stats, RULES, BASE_VOL };
 })(window.App);

@@ -20,7 +20,8 @@ window.App = window.App || {};
     function trackedSymbols() {
         const held = store.positions().filter((p) => p.qty > 0).map((p) => p.asset);
         const alerted = S.alerts.filter((a) => !a.triggeredAt).map((a) => a.asset);
-        return [...new Set([...S.watchlist, ...held, ...alerted, ...(App.extraSymbols ?? [])])];
+        const monthly = (S.monthly?.assets ?? []).map((a) => a.symbol);
+        return [...new Set([...S.watchlist, ...held, ...alerted, ...monthly, ...(App.extraSymbols ?? [])])];
     }
 
     function emitPricesSoon() {
@@ -158,14 +159,15 @@ window.App = window.App || {};
     // ---------- Busca (Ctrl+K) ----------
     let searchIndex = [];
     // mode "open": abre a análise. mode "add": adiciona à lista listId (padrão: a favorita).
-    async function openSearch(mode = 'open', listId = null) {
+    async function openSearch(mode = 'open', listId = null, onPick = null) {
         const dialog = $('#search');
+        dialog._onPick = onPick;
         const input = $('#searchInput');
         dialog.dataset.mode = mode;
         dialog.dataset.list = listId || (store.getList(S.favoriteTab) ?? S.lists[0]).id;
         const target = store.getList(dialog.dataset.list);
-        $('#searchTitle').textContent = mode === 'add' ? `Adicionar a ${target?.name ?? 'lista'}` : 'Buscar cripto';
-        input.placeholder = mode === 'add' ? `Adicionar a “${target?.name ?? 'lista'}”: nome ou símbolo` : 'Nome ou símbolo, ex.: SOL, Chainlink';
+        $('#searchTitle').textContent = mode === 'add' ? `Adicionar a ${target?.name ?? 'lista'}` : mode === 'pick' ? 'Escolher cripto' : 'Buscar cripto';
+        input.placeholder = mode === 'pick' ? 'Nome ou símbolo da cripto' : mode === 'add' ? `Adicionar a “${target?.name ?? 'lista'}”: nome ou símbolo` : 'Nome ou símbolo, ex.: SOL, Chainlink';
         dialog.showModal();
         input.value = '';
         renderSearch('');
@@ -200,7 +202,7 @@ window.App = window.App || {};
             const m = App.coins.meta(c.symbol);
             const dlg = $('#search');
             const inTarget = store.getList(dlg.dataset.list)?.symbols.includes(c.symbol);
-            const tag = dlg.dataset.mode === 'add' ? (inTarget ? 'Já está' : 'Adicionar') : 'Abrir';
+            const tag = dlg.dataset.mode === 'add' ? (inTarget ? 'Já está' : 'Adicionar') : dlg.dataset.mode === 'pick' ? 'Escolher' : 'Abrir';
             return html`<li role="option" class="search-item${i === 0 ? ' is-focus' : ''}" data-symbol="${c.symbol}" aria-selected="${i === 0}">
                 ${raw(App.coins.avatar(c.symbol, 28))}
                 <span class="search-name"><strong>${c.symbol}</strong><span>${m.name !== c.symbol ? m.name : 'Par USDT'}</span></span>
@@ -214,6 +216,10 @@ window.App = window.App || {};
         const dialog = $('#search');
         const mode = dialog.dataset.mode;
         dialog.close();
+        if (mode === 'pick') {
+            dialog._onPick?.(symbol);
+            return;
+        }
         if (mode === 'add') {
             const list = store.getList(dialog.dataset.list);
             if (list && store.addToList(list.id, symbol)) {
@@ -308,6 +314,12 @@ window.App = window.App || {};
         bus.on('settings', renderTopbar);
         bus.on('prices', renderFx);
     }
+
+    // Opções de carteira para selects (inclui "nenhuma").
+    App.walletOptions = (selected, emptyLabel = 'Corretora / sem carteira') => [
+        html`<option value="" ${!selected ? 'selected' : ''}>${emptyLabel}</option>`,
+        ...S.wallets.map((w) => html`<option value="${w.id}" ${w.id === selected ? 'selected' : ''}>${w.name} (${App.web3.shortAddress(w.address)})</option>`),
+    ].join('');
 
     // ---------- Anotações (preço desejado e nota) ----------
     function parseNum(value) {

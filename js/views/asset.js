@@ -19,6 +19,20 @@ App.views = App.views || {};
     let syncing = false;
     let lastCandleDraw = 0;
     let loadToken = 0;
+    let crossList = [];
+    let pickerList = null;
+    let quote = 'USDT';
+    let synthetic = false;
+    let priceLines = [];
+    let buyMap = new Map();
+    let resetRange = true;
+
+    // Formata preço conforme a cotação do gráfico (dólar ou BTC).
+    function px(value) {
+        if (!Number.isFinite(value)) return '—';
+        if (quote === 'BTC') return `${fmt.number(value, value < 0.001 ? 8 : 6)} BTC`;
+        return fmt.money(value);
+    }
 
     function destroyCharts() {
         Object.values(charts).forEach((c) => c.remove());
@@ -39,7 +53,9 @@ App.views = App.views || {};
         charts.rsi = LC.createChart($('#chartRsi', root), App.charts.chartOptions({ timeScale: { visible: false }, handleScroll: false, handleScale: false }));
         charts.macd = LC.createChart($('#chartMacd', root), App.charts.chartOptions({ timeScale: { visible: false }, handleScroll: false, handleScale: false }));
 
-        series.candles = charts.main.addCandlestickSeries({ upColor: c.up, downColor: c.down, borderVisible: false, wickUpColor: c.up, wickDownColor: c.down, priceFormat: { type: 'price', precision: precisionFor(data), minMove: 10 ** -precisionFor(data) } });
+        const prec = quote === 'BTC' ? 8 : precisionFor(data);
+        series.candles = charts.main.addCandlestickSeries({ upColor: c.up, downColor: c.down, borderVisible: false, wickUpColor: c.up, wickDownColor: c.down, priceFormat: { type: 'price', precision: prec, minMove: 10 ** -prec } });
+        priceLines = [];
         series.volume = charts.main.addHistogramSeries({ priceScaleId: 'vol', priceFormat: { type: 'volume' }, lastValueVisible: false, priceLineVisible: false });
         charts.main.priceScale('vol').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
         const line = (color, width = 1.5, extra = {}) => charts.main.addLineSeries({ color, lineWidth: width, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, ...extra });
@@ -90,6 +106,25 @@ App.views = App.views || {};
         series.sma20.setData(ind.sma ? App.ind.sma(data, 20) : []);
         series.sma50.setData(ind.sma ? App.ind.sma(data, 50) : []);
         series.sma200.setData(ind.sma ? App.ind.sma(data, 200) : []);
+        crossList = App.ind.crosses(data);
+        buyMap = quote === 'USDT' ? groupTransactions() : new Map();
+        const markers = [];
+        if (ind.cross) {
+            crossList.forEach((x) => markers.push(x.type === 'golden'
+                ? { time: x.time, position: 'belowBar', color: App.charts.css('--gold'), shape: 'arrowUp', text: 'Golden cross' }
+                : { time: x.time, position: 'aboveBar', color: App.charts.css('--death'), shape: 'arrowDown', text: 'Death cross' }));
+        }
+        if (ind.buys) {
+            buyMap.forEach((txs, time) => {
+                const buys = txs.filter((t) => t.type === 'buy').length;
+                const sells = txs.length - buys;
+                if (buys) markers.push({ time, position: 'belowBar', color: App.charts.css('--brand'), shape: 'circle', size: 0.8 });
+                if (sells) markers.push({ time, position: 'aboveBar', color: App.charts.css('--down'), shape: 'square', size: 0.8 });
+            });
+        }
+        markers.sort((a, b) => a.time - b.time);
+        series.candles.setMarkers(markers);
+        drawPriceLines();
         const bb = ind.bb ? App.ind.bollinger(data) : { upper: [], lower: [] };
         series.bbUp.setData(bb.upper);
         series.bbLow.setData(bb.lower);
@@ -98,10 +133,59 @@ App.views = App.views || {};
         series.macd.setData(m.macdLine);
         series.signal.setData(m.signalLine);
         series.hist.setData(m.histogram.map((h) => ({ ...h, color: h.value >= 0 ? hexA(c.up, 0.5) : hexA(c.down, 0.5) })));
-        const visible = Math.min(data.length, S.settings.timeframe === '1w' ? 160 : 180);
-        const range = { from: data.length - visible, to: data.length + 3 };
-        Object.values(charts).forEach((chart) => chart.timeScale().setVisibleLogicalRange(range));
+        if (resetRange) {
+            const visible = Math.min(data.length, S.settings.timeframe === '1w' ? 160 : 180);
+            const range = { from: data.length - visible, to: data.length + 3 };
+            Object.values(charts).forEach((chart) => chart.timeScale().setVisibleLogicalRange(range));
+            resetRange = false;
+        }
         renderIndicatorReadout();
+    }
+
+    // Agrupa as operações da carteira pelo candle em que caíram.
+    function groupTransactions() {
+        const map = new Map();
+        if (!data.length) return map;
+        const times = data.map((d) => d.time);
+        S.transactions.filter((t) => t.asset === symbol).forEach((t) => {
+            const [y, m, d] = t.date.split('-').map(Number);
+            const ts = Date.UTC(y, m - 1, d) / 1000;
+            if (ts < times[0] - 7 * 86400) return;
+            let lo = 0;
+            let hi = times.length - 1;
+            while (lo < hi) {
+                const mid = Math.ceil((lo + hi) / 2);
+                if (times[mid] <= ts) lo = mid; else hi = mid - 1;
+            }
+            const key = times[lo];
+            if (!map.has(key)) map.set(key, []);
+            map.get(key).push(t);
+        });
+        return map;
+    }
+
+    function drawPriceLines() {
+        priceLines.forEach((l) => { try { series.candles.removePriceLine(l); } catch { /* já removida */ } });
+        priceLines = [];
+        const ind = S.settings.indicators;
+        const add = (price, color, title, style = 2, width = 1) => {
+            if (!Number.isFinite(price) || price <= 0) return;
+            priceLines.push(series.candles.createPriceLine({ price, color, title, lineStyle: style, lineWidth: width, axisLabelVisible: true }));
+        };
+        if (ind.levels) {
+            const lv = App.ind.pivots(data);
+            add(lv.support, App.charts.css('--up'), 'Suporte');
+            add(lv.resistance, App.charts.css('--down'), 'Resistência');
+            if (quote === 'USDT') add(S.notes[symbol]?.buyPrice, App.charts.css('--gold'), 'Meu preço', 0, 2);
+        }
+        if (ind.buys && quote === 'USDT') {
+            const pos = store.positions().find((p) => p.asset === symbol && p.qty > 0);
+            if (pos) add(pos.avgUsd, App.charts.css('--brand'), 'Preço médio', 0, 2);
+        }
+        if (ind.fib) {
+            const sample = S.settings.timeframe === '1w' ? data.slice(-260) : data;
+            (App.ind.fibonacci(sample) ?? []).forEach((f) => add(f.price, App.charts.css('--ink-3'), `Fib ${String(f.ratio).replace('.', ',')}`, 1));
+        }
     }
 
     function hexA(color, alpha) {
@@ -128,13 +212,17 @@ App.views = App.views || {};
             : new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeStyle: 'short' }).format(when);
         tip.innerHTML = html`<strong>${dateText}</strong>
             <dl>
-                <dt>Abertura</dt><dd>${fmt.money(d.open)}</dd>
-                <dt>Máxima</dt><dd>${fmt.money(d.high)}</dd>
-                <dt>Mínima</dt><dd>${fmt.money(d.low)}</dd>
-                <dt>Fechamento</dt><dd>${fmt.money(d.close)}</dd>
+                <dt>Abertura</dt><dd>${px(d.open)}</dd>
+                <dt>Máxima</dt><dd>${px(d.high)}</dd>
+                <dt>Mínima</dt><dd>${px(d.low)}</dd>
+                <dt>Fechamento</dt><dd>${px(d.close)}</dd>
                 <dt>Variação</dt><dd class="delta-${toneOf(change)}">${fmt.pct(change)}</dd>
                 <dt>Volume</dt><dd>${fmt.compactMoney(d.quoteVolume)}</dd>
-            </dl>`;
+            </dl>${raw((() => { const x = crossList.find((c) => c.time === d.time); return x ? html`<p class="tip-cross tip-${x.type}">${x.type === 'golden' ? 'Golden cross: SMA 50 cruzou acima da SMA 200' : 'Death cross: SMA 50 cruzou abaixo da SMA 200'}</p>` : ''; })())}${raw((() => {
+                const txs = S.settings.indicators.buys ? buyMap.get(d.time) : null;
+                if (!txs?.length) return '';
+                return html`<p class="tip-buys">${raw(txs.map((t) => html`<span>${t.type === 'buy' ? 'Você comprou' : 'Você vendeu'} ${S.settings.privacy ? '•••' : fmt.qty(t.qty)} a ${fmt.money(t.priceUsd)}</span>`).join(''))}</p>`;
+            })())}`;
         tip.hidden = false;
         const box = $('#chartMain', root).getBoundingClientRect();
         const left = param.point.x > box.width / 2 ? param.point.x - tip.offsetWidth - 16 : param.point.x + 16;
@@ -158,13 +246,23 @@ App.views = App.views || {};
         $('#chartState', root).textContent = 'Carregando gráfico…';
         $('#chartState', root).hidden = false;
         try {
-            const rows = await App.api.klines(symbol, tf, TF[tf].limit);
+            let rows;
+            if (quote === 'BTC') {
+                const res = await App.api.klinesInBtc(symbol, tf, TF[tf].limit);
+                rows = res.rows;
+                synthetic = res.synthetic;
+            } else {
+                rows = await App.api.klines(symbol, tf, TF[tf].limit);
+                synthetic = false;
+            }
             if (token !== loadToken || !root) return;
             data = rows.map((r) => ({ ...r }));
             $('#chartState', root).hidden = true;
+            resetRange = true;
             buildCharts();
             fillCharts();
-            klineStream.set([`${symbol.toLowerCase()}usdt@kline_${tf}`]);
+            renderQuoteNote();
+            klineStream.set(quote === 'BTC' && synthetic ? [] : [`${symbol.toLowerCase()}${quote.toLowerCase()}@kline_${tf}`]);
         } catch (error) {
             if (token !== loadToken || !root) return;
             $('#chartState', root).textContent = error.status === 400
@@ -176,7 +274,7 @@ App.views = App.views || {};
     function onKline(msg) {
         if (msg.e !== 'kline' || !data.length) return;
         const k = msg.k;
-        if (k.i !== S.settings.timeframe || !k.s.startsWith(symbol)) return;
+        if (k.i !== S.settings.timeframe || k.s !== `${symbol}${quote}`) return;
         const candle = { time: Math.floor(k.t / 1000), open: Number(k.o), high: Number(k.h), low: Number(k.l), close: Number(k.c), volume: Number(k.v), quoteVolume: Number(k.q) };
         const lastRow = data[data.length - 1];
         if (candle.time > lastRow.time) {
@@ -239,14 +337,38 @@ App.views = App.views || {};
     async function renderSignal() {
         const el = $('#signalPanel', root);
         try {
-            const rows = await App.api.klines(symbol, '1d', 1000);
+            const [rows, rows4h, rows1w] = await Promise.all([
+                App.api.klines(symbol, '1d', 1000),
+                App.api.klines(symbol, '4h', 1000).catch(() => []),
+                App.api.klines(symbol, '1w', 520).catch(() => []),
+            ]);
             if (!root) return;
             const a = App.ind.analyze(rows);
+            const multi = [['4H', App.ind.analyze(rows4h)], ['1D', a], ['1S', App.ind.analyze(rows1w)]];
+            const valid = multi.filter(([, x]) => x);
+            const tones = new Set(valid.map(([, x]) => x.tone));
+            const agree = valid.length === 3 && tones.size === 1;
+            const multiHtml = html`<div class="mtf">
+                <p class="mtf-title">Em cada tempo gráfico</p>
+                <div class="mtf-row">${raw(multi.map(([label, x]) => html`<span class="mtf-item mtf-${x?.tone ?? 'none'}"><b>${label}</b>${x ? x.action : 'sem dados'}</span>`).join(''))}</div>
+                <p class="mtf-note">${agree ? 'Os três tempos concordam: leitura mais forte.' : valid.length < 3 ? 'Histórico curto em algum tempo gráfico.' : 'Os tempos divergem: trate o sinal com mais cautela.'}</p>
+            </div>`;
             if (!a) {
                 el.innerHTML = '<p class="muted">Histórico curto demais para formar uma leitura (mínimo de 60 dias).</p>';
                 return;
             }
             const t = a.thresholds;
+            const dailyCrosses = App.ind.crosses(rows);
+            const lastCross = dailyCrosses[dailyCrosses.length - 1];
+            const s50 = App.ind.sma(rows, 50).at(-1)?.value;
+            const s200 = rows.length >= 200 ? App.ind.sma(rows, 200).at(-1)?.value : null;
+            const spread = s50 && s200 ? ((s50 - s200) / s200) * 100 : null;
+            const crossHtml = lastCross
+                ? html`<div class="cross-note cross-${lastCross.type}">
+                    <strong>${lastCross.type === 'golden' ? 'Golden cross' : 'Death cross'}</strong> no diário em ${new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeZone: 'UTC' }).format(new Date(lastCross.time * 1000))}, há ${Math.max(0, Math.round((Date.now() / 1000 - lastCross.time) / 86400))} dias.
+                    ${spread === null ? '' : `A SMA 50 está ${fmt.number(Math.abs(spread), 1)}% ${spread >= 0 ? 'acima' : 'abaixo'} da SMA 200.`}
+                </div>`
+                : (s200 ? html`<div class="cross-note">Sem cruzamento da SMA 50 com a SMA 200 no histórico disponível.</div>` : '');
             el.innerHTML = html`
                 <div class="signal-head signal-${a.tone}">
                     <span class="signal-badge">${a.tone === 'up' ? 'Favorável' : a.tone === 'down' ? 'Cautela' : 'Neutro'}</span>
@@ -259,6 +381,8 @@ App.views = App.views || {};
                     <div><dt>Suporte</dt><dd>${fmt.money(a.support)}</dd></div>
                     <div><dt>Resistência</dt><dd>${fmt.money(a.resistance)}</dd></div>
                 </dl>
+                ${raw(multiHtml)}
+                ${raw(crossHtml)}
                 <ul class="reasons">${raw(a.reasons.map((r) => html`<li><strong>${r.title}</strong> ${r.text}</li>`).join(''))}</ul>
                 <details class="method">
                     <summary>Como essa leitura é formada</summary>
@@ -269,6 +393,164 @@ App.views = App.views || {};
         } catch (error) {
             if (root) el.innerHTML = '<p class="muted">Não foi possível calcular o sinal agora.</p>';
         }
+    }
+
+    function renderQuoteNote() {
+        const el = $('#quoteNote', root);
+        if (!el) return;
+        el.hidden = quote !== 'BTC';
+        el.textContent = synthetic
+            ? `Não existe o par ${symbol}/BTC na Binance; o gráfico divide ${symbol}/USDT por BTC/USDT (máximas e mínimas aproximadas, sem atualização ao vivo).`
+            : `Preço de ${symbol} em BTC. Subindo aqui, ${symbol} está ganhando do Bitcoin.`;
+    }
+
+    // ---------- Calculadora de aporte ----------
+    function renderCalc() {
+        const el = $('#calcOut', root);
+        if (!el) return;
+        const amount = App.parseNum($('#calcAmount', root).value);
+        const price = App.priceOf(symbol);
+        const fx = App.live.fx;
+        if (!(amount > 0) || !price || !fx) {
+            el.innerHTML = html`<p class="muted small">${!(amount > 0) ? 'Digite um valor em reais.' : 'Aguardando cotação…'}</p>`;
+            $('#calcBuy', root).disabled = true;
+            return;
+        }
+        const usd = amount / fx;
+        const qty = usd / price;
+        const positions = store.positions().filter((p) => p.qty > 0);
+        const pos = positions.find((p) => p.asset === symbol);
+        const newQty = (pos?.qty ?? 0) + qty;
+        const newCost = (pos?.costUsd ?? 0) + usd;
+        const newAvg = newCost / newQty;
+        const totalNow = positions.reduce((a, p) => a + p.qty * (App.priceOf(p.asset) ?? 0), 0);
+        const weightNow = totalNow ? ((pos?.qty ?? 0) * price / totalNow) * 100 : 0;
+        const weightAfter = ((newQty * price) / (totalNow + usd)) * 100;
+        const avgChange = pos?.avgUsd ? ((newAvg - pos.avgUsd) / pos.avgUsd) * 100 : null;
+        el.innerHTML = html`<dl class="kv">
+            <dt>Você compra</dt><dd>${fmt.qty(qty)} ${symbol}</dd>
+            <dt>Em dólar</dt><dd>${fmt.money(usd, 'USD', 2)}</dd>
+            <dt>Preço médio</dt><dd>${fmt.money(newAvg)}${raw(avgChange === null ? '' : html` <small class="delta-${toneOf(-avgChange)}">${fmt.pct(avgChange, 1)}</small>`)}</dd>
+            <dt>Peso na carteira</dt><dd>${fmt.number(weightNow, 1)}% → ${fmt.number(weightAfter, 1)}%</dd>
+        </dl>`;
+        $('#calcBuy', root).disabled = false;
+    }
+
+    function registerCalc() {
+        const amount = App.parseNum($('#calcAmount', root).value);
+        const price = App.priceOf(symbol);
+        const fx = App.live.fx;
+        if (!(amount > 0) || !price || !fx) return;
+        const usd = amount / fx;
+        if (!window.confirm(`Registrar compra de ${fmt.qty(usd / price)} ${symbol} por ${fmt.money(amount, 'BRL', 2)} hoje, a ${fmt.money(price)}?\n\nDepois você pode editar na Carteira para colocar o preço exato da corretora.`)) return;
+        store.upsertTx({ asset: symbol, type: 'buy', date: App.util.localIso(), qty: usd / price, priceUsd: price, totalUsd: usd, totalBrl: amount, fxRate: fx, note: 'Calculadora da Análise' });
+        toast(`Compra de ${symbol} registrada.`, 'up');
+    }
+
+    // ---------- Estatísticas ----------
+    const MONTHS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+
+    async function renderStats() {
+        const el = $('#statsBody', root);
+        try {
+            const [daily, btcDaily] = await Promise.all([
+                App.api.dailyHistory(symbol, '2017-08-17'),
+                symbol === 'BTC' ? Promise.resolve(null) : App.api.dailyHistory('BTC', '2017-08-17').catch(() => null),
+            ]);
+            if (!root) return;
+            const st = App.ind.stats(daily);
+            if (!st) { el.innerHTML = '<p class="muted">Histórico curto demais para estatísticas.</p>'; return; }
+            const btc = btcDaily ? App.ind.stats(btcDaily) : null;
+            const dfmt = (iso) => fmt.date(iso);
+            const years = [...new Set(st.months.map((m) => m.key.slice(0, 4)))];
+            const byKey = new Map(st.months.map((m) => [m.key, m]));
+            const avg = MONTHS.map((_, i) => {
+                const vals = st.months.filter((m) => Number(m.key.slice(5, 7)) === i + 1 && !m.partial).map((m) => m.ret);
+                return vals.length ? { v: vals.reduce((a, b) => a + b, 0) / vals.length, up: vals.filter((v) => v > 0).length, n: vals.length } : null;
+            });
+            const cell = (v, extra = '') => {
+                if (v === null || v === undefined) return '<td class="hm-empty"></td>';
+                const strength = Math.min(1, Math.abs(v) / 40);
+                const mix = Math.round(10 + strength * 60);
+                return html`<td class="hm" style="background:color-mix(in srgb, var(${v >= 0 ? '--up' : '--down'}) ${mix}%, transparent)" ${raw(extra)}>${fmt.number(Math.abs(v) < 0.5 ? 0 : v, 0)}%</td>`;
+            };
+            el.innerHTML = html`
+                <dl class="stat-kpis">
+                    <div><dt>Últimos 12 meses</dt><dd class="delta-${toneOf(st.yearReturn)}">${st.yearReturn === null ? '—' : fmt.pct(st.yearReturn, 1)}</dd></div>
+                    <div><dt>Abaixo da máxima</dt><dd class="delta-${toneOf(st.fromAth)}">${fmt.pct(st.fromAth, 1)}</dd></div>
+                    <div><dt>Maior queda</dt><dd class="delta-down">${fmt.pct(st.maxDrawdown, 1)}</dd><small class="muted">${dfmt(st.ddPeakDay)} a ${dfmt(st.ddTroughDay)} (${st.drawdownDays} dias)</small></div>
+                    <div><dt>Recuperação dessa queda</dt><dd>${st.recoveryDays === null ? 'Ainda não voltou ao topo' : `${st.recoveryDays} dias`}</dd></div>
+                    <div><dt>Volatilidade anual</dt><dd>${fmt.number(st.annualVol, 0)}%</dd>${raw(btc ? html`<small class="muted">${fmt.number(st.annualVol / btc.annualVol, 1)}× a do Bitcoin</small>` : '')}</div>
+                </dl>
+                <div class="table-wrap">
+                    <table class="hm-table">
+                        <thead><tr><th>Ano</th>${raw(MONTHS.map((m) => `<th>${m}</th>`).join(''))}<th>Ano</th></tr></thead>
+                        <tbody>
+                            ${raw(years.slice().reverse().map((y) => {
+                                const ms = MONTHS.map((_, i) => byKey.get(`${y}-${String(i + 1).padStart(2, '0')}`));
+                                const present = ms.filter(Boolean);
+                                const yearRet = present.length ? (present.reduce((a, m) => a * (1 + m.ret / 100), 1) - 1) * 100 : null;
+                                return `<tr><th>${y}</th>${ms.map((m) => cell(m?.ret, m?.partial ? 'title="Mês em andamento"' : '')).join('')}${cell(yearRet, 'class="hm hm-year"')}</tr>`;
+                            }).join(''))}
+                        </tbody>
+                        <tfoot><tr><th>Média</th>${raw(avg.map((a) => (a ? cell(a.v, `title="Subiu em ${a.up} de ${a.n} anos"`) : '<td class="hm-empty"></td>')).join(''))}<td></td></tr></tfoot>
+                    </table>
+                </div>
+                <p class="footnote">Fechamentos diários na Binance desde ${dfmt(st.firstDay)}. Retorno mensal do último fechamento de um mês ao do seguinte; a linha “Média” ignora o mês em andamento. Passado não garante resultado futuro.</p>`;
+        } catch (error) {
+            console.error(error);
+            if (root) el.innerHTML = '<p class="muted">Não consegui carregar o histórico agora.</p>';
+        }
+    }
+
+    // ---------- Seletor por lista ----------
+    function choosePickerList() {
+        const pref = S.settings.analysisList;
+        const valid = (id) => id && S.tabs.includes(id);
+        if (valid(pref) && App.lists.symbols(pref).includes(symbol)) return pref;
+        const containing = S.tabs.find((id) => App.lists.symbols(id).includes(symbol));
+        if (containing) return containing;
+        return valid(pref) ? pref : S.favoriteTab;
+    }
+
+    function renderPicker() {
+        const el = $('#picker', root);
+        if (!el) return;
+        const ids = S.tabs;
+        const syms = App.lists.symbols(pickerList);
+        const i = syms.indexOf(symbol);
+        $('#pickerList', root).innerHTML = ids.map((id) => html`<option value="${id}" ${id === pickerList ? 'selected' : ''}>${App.lists.name(id)} (${App.lists.symbols(id).length})</option>`).join('');
+        $('#pickPrev', root).disabled = syms.length < 2 && i >= 0;
+        $('#pickNext', root).disabled = syms.length < 2 && i >= 0;
+        const strip = $('#pickerStrip', root);
+        if (!syms.length) {
+            strip.innerHTML = html`<span class="muted small">Lista vazia.</span>`;
+            return;
+        }
+        strip.innerHTML = syms.map((s) => {
+            const ch = App.live.prices[s]?.changePct;
+            return html`<a class="pchip${s === symbol ? ' is-current' : ''}" href="#/ativo/${s}" style="--coin:${App.coins.meta(s).color}" ${raw(s === symbol ? 'aria-current="page"' : '')}>
+                ${raw(App.coins.avatar(s, 20))}<strong>${s}</strong><span class="delta-${toneOf(ch)}" data-pchg="${s}">${Number.isFinite(ch) ? fmt.pct(ch, 1) : ''}</span>
+            </a>`;
+        }).join('');
+        $('.pchip.is-current', strip)?.scrollIntoView({ block: 'nearest', inline: 'center' });
+    }
+
+    function updatePickerPrices() {
+        $$('[data-pchg]', root).forEach((el) => {
+            const ch = App.live.prices[el.dataset.pchg]?.changePct;
+            if (!Number.isFinite(ch)) return;
+            el.textContent = fmt.pct(ch, 1);
+            el.className = `delta-${toneOf(ch)}`;
+        });
+    }
+
+    function step(delta) {
+        const syms = App.lists.symbols(pickerList);
+        if (!syms.length) return;
+        const i = syms.indexOf(symbol);
+        const next = i < 0 ? syms[delta > 0 ? 0 : syms.length - 1] : syms[(i + delta + syms.length) % syms.length];
+        if (next && next !== symbol) App.go(`#/ativo/${next}`);
     }
 
     function renderListPop() {
@@ -345,6 +627,32 @@ App.views = App.views || {};
         document.addEventListener('click', closePop);
         offs.push(() => document.removeEventListener('click', closePop));
         $('#noteEdit', root).addEventListener('click', () => App.openNote(symbol));
+        $('#pickerList', root).addEventListener('change', (event) => {
+            pickerList = event.target.value;
+            S.settings.analysisList = pickerList;
+            store.save();
+            renderPicker();
+            if (pickerList === 'smart:discount') App.lists.ensureSignals(() => root && renderPicker());
+        });
+        $('#quoteSwitch', root)?.addEventListener('click', (event) => {
+            const b = event.target.closest('[data-quote]');
+            if (!b || b.dataset.quote === quote) return;
+            quote = b.dataset.quote;
+            $$('#quoteSwitch button', root).forEach((x) => x.setAttribute('aria-pressed', x === b));
+            loadChart();
+        });
+        $('#calcAmount', root).addEventListener('input', renderCalc);
+        $('#calcBuy', root).addEventListener('click', registerCalc);
+        $('#pickPrev', root).addEventListener('click', () => step(-1));
+        $('#pickNext', root).addEventListener('click', () => step(1));
+        const onKey = (event) => {
+            if (event.altKey || event.ctrlKey || event.metaKey) return;
+            if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName) || document.querySelector('dialog[open]')) return;
+            if (event.key === 'ArrowLeft') { event.preventDefault(); step(-1); }
+            if (event.key === 'ArrowRight') { event.preventDefault(); step(1); }
+        };
+        document.addEventListener('keydown', onKey);
+        offs.push(() => document.removeEventListener('keydown', onKey));
         $('#alertForm', root).addEventListener('submit', (event) => {
             event.preventDefault();
             const price = Number($('#alertPrice', root).value.replace(',', '.'));
@@ -379,7 +687,17 @@ App.views = App.views || {};
             App.refreshPrices();
             const m = App.coins.meta(symbol);
             el.style.setProperty('--coin', m.color);
+            pickerList = choosePickerList();
+            quote = 'USDT';
+            resetRange = true;
             el.innerHTML = html`
+                <nav id="picker" class="picker" aria-label="Escolher cripto pela lista">
+                    <label class="sr-only" for="pickerList">Lista</label>
+                    <select id="pickerList" class="input input-small"></select>
+                    <button id="pickPrev" class="icon-btn icon-btn-lg" type="button" aria-label="Cripto anterior da lista" title="Anterior (←)">‹</button>
+                    <div id="pickerStrip" class="picker-strip"></div>
+                    <button id="pickNext" class="icon-btn icon-btn-lg" type="button" aria-label="Próxima cripto da lista" title="Próxima (→)">›</button>
+                </nav>
                 <header class="asset-hero">
                     <div class="asset-id">
                         ${raw(App.coins.avatar(symbol, 52))}
@@ -409,17 +727,31 @@ App.views = App.views || {};
                             <div id="tfSwitch" class="seg" role="group" aria-label="Período de cada candle">
                                 ${raw(Object.entries(TF).map(([k, v]) => html`<button type="button" data-tf="${k}" aria-pressed="${S.settings.timeframe === k}">${v.label}</button>`).join(''))}
                             </div>
-                            <div id="indSwitch" class="seg seg-soft" role="group" aria-label="Indicadores no gráfico">
+                            ${raw(symbol === 'BTC' ? '' : html`<div id="quoteSwitch" class="seg" role="group" aria-label="Cotação do gráfico">
+                                <button type="button" data-quote="USDT" aria-pressed="true">Em US$</button>
+                                <button type="button" data-quote="BTC" aria-pressed="false">Em BTC</button>
+                            </div>`)}
+                            <div id="indSwitch" class="seg seg-soft seg-wrap" role="group" aria-label="Camadas no gráfico">
                                 <button type="button" data-ind="sma" aria-pressed="${S.settings.indicators.sma}">Médias</button>
                                 <button type="button" data-ind="bb" aria-pressed="${S.settings.indicators.bb}">Bollinger</button>
                                 <button type="button" data-ind="volume" aria-pressed="${S.settings.indicators.volume}">Volume</button>
+                                <button type="button" data-ind="cross" aria-pressed="${S.settings.indicators.cross !== false}" title="Golden cross e death cross (SMA 50 × SMA 200)">Cruzamentos</button>
+                                <button type="button" data-ind="buys" aria-pressed="${S.settings.indicators.buys !== false}" title="Suas compras e vendas e o seu preço médio">Minhas compras</button>
+                                <button type="button" data-ind="levels" aria-pressed="${S.settings.indicators.levels !== false}" title="Suporte, resistência e o preço que você quer pagar">Níveis</button>
+                                <button type="button" data-ind="fib" aria-pressed="${!!S.settings.indicators.fib}" title="Retrações de Fibonacci do último grande movimento">Fibonacci</button>
                             </div>
                         </div>
                         <div class="chart-legend">
                             <span><i style="background:var(--sma20)"></i>SMA 20</span>
                             <span><i style="background:var(--sma50)"></i>SMA 50</span>
                             <span><i style="background:var(--coin)"></i>SMA 200</span>
+                            <span><b class="mk mk-gold">▲</b>Golden cross</span>
+                            <span><b class="mk mk-death">▼</b>Death cross</span>
+                            <span><b class="mk mk-buy">●</b>Compra</span>
+                            <span><i style="background:var(--brand)"></i>Preço médio</span>
+                            <span><i style="background:var(--gold)"></i>Meu preço</span>
                         </div>
+                        <p id="quoteNote" class="quote-note" hidden></p>
                         <div class="chart-box">
                             <div id="chartMain" class="chart-main"></div>
                             <div id="chartTip" class="chart-tip" hidden></div>
@@ -442,6 +774,12 @@ App.views = App.views || {};
                             <div id="positionCard"></div>
                         </section>
                         <section class="panel">
+                            <h2 class="panel-title">Simular aporte</h2>
+                            <label class="calc-input"><span>Valor em R$</span><input id="calcAmount" class="input" inputmode="decimal" autocomplete="off" value="${S.plan.budgetBrl || 500}"></label>
+                            <div id="calcOut"></div>
+                            <button id="calcBuy" class="btn btn-primary calc-btn" type="button">Registrar esta compra</button>
+                        </section>
+                        <section class="panel">
                             <div class="panel-bar"><h2 class="panel-title">Anotações</h2><button id="noteEdit" class="btn btn-small" type="button">Editar</button></div>
                             <div id="noteCard"></div>
                         </section>
@@ -455,19 +793,29 @@ App.views = App.views || {};
                             <ul id="assetAlerts" class="alert-list"></ul>
                         </section>
                     </aside>
-                </div>`;
+                </div>
+                <section class="panel">
+                    <div class="panel-bar"><h2 class="panel-title">Histórico e sazonalidade</h2><span class="muted small">Retorno de cada mês</span></div>
+                    <div id="statsBody"><p class="muted">Carregando histórico…</p></div>
+                </section>`;
             klineStream = App.api.createStream(`kline-${symbol}`);
             klineStream.onMessage(onKline);
             wire();
             renderHero();
             renderAlerts();
             renderNote();
+            renderCalc();
+            renderStats();
+            renderPicker();
+            if (pickerList === 'smart:discount') App.lists.ensureSignals(() => root && renderPicker());
             loadChart();
             renderSignal();
             offs.push(
-                bus.on('prices', () => { renderHero(); renderNote(); }),
+                bus.on('prices', () => { renderHero(); renderNote(); updatePickerPrices(); renderCalc(); }),
+                bus.on('transactions', () => { fillCharts(); renderCalc(); }),
+                bus.on('notes', () => fillCharts()),
                 bus.on('notes', renderNote),
-                bus.on('lists', renderHero),
+                bus.on('lists', () => { renderHero(); renderPicker(); }),
                 bus.on('settings', renderHero),
                 bus.on('transactions', renderPosition),
                 bus.on('alerts', renderAlerts),

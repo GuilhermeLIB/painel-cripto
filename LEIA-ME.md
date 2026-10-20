@@ -55,6 +55,32 @@ e o preço que estavam salvos.
 - O ✎ de cada linha guarda o preço que você quer pagar e uma nota, e pode
   criar um alerta nesse preço.
 
+## Carteiras Web3
+
+A aba **Web3** lê carteiras pelo endereço público (0x…), sem conectar nem
+assinar nada. Redes: Ethereum, Arbitrum, Base, Optimism e Polygon.
+Mostra tokens, gás disponível, depósitos e empréstimos no Aave v3 (com fator
+de saúde) e posições da Uniswap v3, além da comparação com o que foi
+registrado na Carteira.
+
+Fontes públicas, sem chave: RPCs públicos (publicnode e oficiais das redes),
+Blockscout para descobrir tokens e DefiLlama para preços. Se um RPC público
+ficar instável, cole uma URL de RPC sua nas configurações da aba. Nunca
+digite frase-semente ou chave privada.
+
+## Pools
+
+A aba **Pools** sugere faixas de liquidez concentrada (conservadora,
+equilibrada e agressiva) pela volatilidade real do par, simula o resultado
+contra segurar os tokens, compara o custo de gás entre as redes, monitora as
+posições das carteiras e as do diário e avisa quando é hora de remontar.
+
+Em **Pools → Descobrir pools**, o painel mostra volume, taxas e liquidez por
+rede e por app (dados públicos do GeckoTerminal), destaques automáticos e um
+ranking filtrável; “Planejar” leva a pool escolhida para o planejador.
+
+Para receber alertas no Telegram com o painel fechado, veja **ALERTAS.md**.
+
 ## Estrutura
 
 - `index.html`: casca da aplicação e diálogos.
@@ -65,7 +91,11 @@ e o preço que estavam salvos.
 - `js/store.js`: dados salvos e cálculo de posições (custo médio).
 - `js/indicators.js`: médias, RSI, MACD, Bollinger, suporte e resistência,
   e a leitura de aporte ajustada à volatilidade de cada cripto.
-- `js/views/`: telas Mercado, Análise, Carteira e Alertas.
+- `js/lists.js`: listas manuais e automáticas.
+- `js/web3.js`: leitura on-chain (RPC, Multicall3, Aave, Uniswap, preços).
+- `js/poolmath.js`: matemática de liquidez concentrada (faixas, depósito, perda impermanente).
+- `scripts/alertas-pools.mjs` e `.github/workflows/alertas-pools.yml`: alertas agendados no Telegram.
+- `js/views/`: telas Mercado, Análise, Carteira (com o plano mensal), Web3 e Alertas.
 
 Cotações e gráficos: API pública da Binance. Gráficos: Lightweight Charts
 (TradingView). Ícones: cryptocurrency-icons. Informação, não recomendação de

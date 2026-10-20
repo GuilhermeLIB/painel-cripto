@@ -15,11 +15,7 @@ App.views = App.views || {};
         '30d': { label: '30 dias', days: 30 },
         '1y': { label: '1 ano', days: 365 },
     };
-    const SMART = {
-        'smart:portfolio': { name: 'Na carteira', hint: 'Criptos em que você tem posição. Atualiza sozinha.' },
-        'smart:discount': { name: 'Com desconto', hint: 'Das suas listas e da carteira, as que o sinal diário marca como “Aportar reforçado”.' },
-        'smart:alerts': { name: 'Com alerta', hint: 'Criptos com alerta de preço ativo.' },
-    };
+    const SMART = App.lists.SMART;
     const SIGNAL_ORDER = { 'Aportar reforçado': 0, 'Aporte normal': 1, 'Esperar recuo': 2 };
     const MAX_COMPARE = 6;
 
@@ -48,7 +44,7 @@ App.views = App.views || {};
                 const d = data[symbol] || (data[symbol] = {});
                 try {
                     const jobs = [];
-                    if (!d.d1) jobs.push(App.api.klines(symbol, '1d', 1000).then((rows) => { d.d1 = rows; d.analysis = App.ind.analyze(rows); }));
+                    if (!d.d1) jobs.push(App.api.klines(symbol, '1d', 1000).then((rows) => { d.d1 = rows; d.analysis = App.ind.analyze(rows); App.signals[symbol] = d.analysis; }));
                     if (d.ath === undefined) jobs.push(App.api.klines(symbol, '1w', 1000).then((rows) => { d.ath = Math.max(...rows.map((r) => r.high)); }).catch(() => { d.ath = null; }));
                     if (withHourly && !d.h1) jobs.push(App.api.klines(symbol, '1h', 25).then((rows) => { d.h1 = rows; }));
                     await Promise.all(jobs);
@@ -121,27 +117,9 @@ App.views = App.views || {};
     }
 
     // ---------- Listas ----------
-    function isSmart(id) { return id.startsWith('smart:'); }
-
-    function tabName(id) {
-        return isSmart(id) ? SMART[id].name : store.getList(id)?.name ?? '';
-    }
-
-    function tabSymbols(id) {
-        if (id === 'smart:portfolio') {
-            return store.positions().filter((p) => p.qty > 0)
-                .sort((a, b) => b.qty * (priceNow(b.asset) ?? 0) - a.qty * (priceNow(a.asset) ?? 0))
-                .map((p) => p.asset);
-        }
-        if (id === 'smart:discount') {
-            const pool = new Set([...S.watchlist, ...store.positions().filter((p) => p.qty > 0).map((p) => p.asset)]);
-            return [...pool].filter((s) => data[s]?.analysis?.action === 'Aportar reforçado');
-        }
-        if (id === 'smart:alerts') {
-            return [...new Set(S.alerts.filter((a) => !a.triggeredAt).map((a) => a.asset))];
-        }
-        return store.getList(id)?.symbols ?? [];
-    }
+    const isSmart = App.lists.isSmart;
+    const tabName = App.lists.name;
+    const tabSymbols = App.lists.symbols;
 
     function visibleSymbols() {
         let list = [...tabSymbols(tab)];
@@ -382,6 +360,7 @@ App.views = App.views || {};
         const list = visibleSymbols();
         const all = tabSymbols(tab);
         enqueue([...new Set([...all, 'BTC', ...(compare.picked ?? [])])], period() === '24h');
+        App.lists.ensureSignals(() => { if (root) { renderTabsCounts(); if (tab === 'smart:discount') renderBody(); } });
         renderBreadth(all);
         const isMap = S.settings.marketView === 'heatmap';
         $('#tableWrap', root).hidden = isMap;

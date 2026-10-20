@@ -54,11 +54,31 @@ window.App = window.App || {};
         };
     }
 
-    function klines(symbol, interval, limit = 500) {
-        return cached(`k:${symbol}:${interval}:${limit}`, 60 * 1000, async () => {
-            const raw = await getJson(`${REST}/klines?symbol=${pair(symbol)}&interval=${interval}&limit=${limit}`);
+    function klines(symbol, interval, limit = 500, quote = 'USDT') {
+        return cached(`k:${symbol}${quote}:${interval}:${limit}`, 60 * 1000, async () => {
+            const raw = await getJson(`${REST}/klines?symbol=${symbol}${quote}&interval=${interval}&limit=${limit}`);
             return raw.map(normalizeKline);
         });
+    }
+
+    // Candles da cripto cotada em BTC. Usa o par real (ex.: ETHBTC) quando existe;
+    // senão monta um par sintético dividindo XXX/USDT por BTC/USDT.
+    async function klinesInBtc(symbol, interval, limit) {
+        try {
+            const rows = await klines(symbol, interval, limit, 'BTC');
+            if (rows.length) return { rows, synthetic: false };
+        } catch (error) {
+            if (error.status !== 400) throw error;
+        }
+        const [alt, btc] = await Promise.all([klines(symbol, interval, limit), klines('BTC', interval, limit)]);
+        const btcMap = new Map(btc.map((r) => [r.time, r]));
+        const rows = alt.filter((r) => btcMap.has(r.time)).map((r) => {
+            const b = btcMap.get(r.time);
+            const open = r.open / b.open;
+            const close = r.close / b.close;
+            return { ...r, open, close, high: Math.max(open, close), low: Math.min(open, close) };
+        });
+        return { rows, synthetic: true };
     }
 
     // Histórico diário completo a partir de uma data (paginado de 1000 em 1000).
@@ -229,5 +249,5 @@ window.App = window.App || {};
         };
     }
 
-    App.api = { klines, dailyHistory, tickers, universe, fxNow, closeOn, createStream, pair };
+    App.api = { klines, klinesInBtc, dailyHistory, tickers, universe, fxNow, closeOn, createStream, pair };
 })(window.App);

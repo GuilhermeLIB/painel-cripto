@@ -15,7 +15,8 @@ window.App = window.App || {};
             currency: 'BRL',
             privacy: false,
             timeframe: '1d',
-            indicators: { sma: true, bb: false, volume: true },
+            indicators: { sma: true, bb: false, volume: true, cross: true, buys: true, levels: true, fib: false },
+            analysisList: null,
             marketPeriod: '30d',
             marketView: 'table',
             heatSize: 'volume',
@@ -34,6 +35,23 @@ window.App = window.App || {};
             useSignal: false,
         },
         alerts: [],
+        monthly: {
+            budgetBrl: 1500,
+            weekday: 1,
+            weeks: 'four',
+            mode: 'all',
+            minOrderUsd: 5,
+            customWeights: false,
+            assets: ['ETH', 'UNI', 'LINK', 'DOT', 'EIGEN', 'ENA', 'AAVE'].map((symbol) => ({ symbol, weight: 1 })),
+            log: {},
+            walletId: null,
+        },
+        wallets: [],
+        walletSnapshots: {},
+        web3Settings: { rpc: {}, blockscoutKey: '', customTokens: [], showSmall: false },
+        pools: [],
+        poolWatch: {},
+        poolForm: null,
     });
 
     function load() {
@@ -51,6 +69,10 @@ window.App = window.App || {};
                 notes: parsed.notes && typeof parsed.notes === 'object' ? parsed.notes : {},
                 transactions: Array.isArray(parsed.transactions) ? parsed.transactions.filter(isValidTx).map(normalizeTx) : [],
                 alerts: Array.isArray(parsed.alerts) ? parsed.alerts : [],
+                monthly: { ...base.monthly, ...parsed.monthly, log: { ...parsed.monthly?.log } },
+                wallets: Array.isArray(parsed.wallets) ? parsed.wallets.filter((w) => w && /^0x[0-9a-fA-F]{40}$/.test(w.address)) : [],
+                walletSnapshots: parsed.walletSnapshots && typeof parsed.walletSnapshots === 'object' ? parsed.walletSnapshots : {},
+                web3Settings: { ...base.web3Settings, ...parsed.web3Settings, rpc: { ...parsed.web3Settings?.rpc } },
             };
         } catch (error) {
             console.error(error);
@@ -127,6 +149,7 @@ window.App = window.App || {};
             fxRate,
             feeUsd: Number(tx.feeUsd) > 0 ? Number(tx.feeUsd) : 0,
             note: String(tx.note ?? '').slice(0, 200),
+            walletId: tx.walletId ? String(tx.walletId) : null,
         };
     }
 
@@ -268,6 +291,44 @@ window.App = window.App || {};
         commit('notes');
     }
 
+    // ---- Carteiras Web3 (só endereços públicos) ----
+    function saveWallet(wallet) {
+        const clean = {
+            id: wallet.id || `w${uid()}`,
+            name: String(wallet.name || 'Carteira').trim().slice(0, 40),
+            address: String(wallet.address).trim(),
+            chains: Array.isArray(wallet.chains) ? wallet.chains : [],
+            color: wallet.color || LIST_COLORS[state.wallets.length % LIST_COLORS.length],
+        };
+        const i = state.wallets.findIndex((w) => w.id === clean.id);
+        if (i >= 0) state.wallets[i] = clean;
+        else state.wallets.push(clean);
+        commit('wallets');
+        return clean;
+    }
+
+    function removeWallet(id) {
+        state.wallets = state.wallets.filter((w) => w.id !== id);
+        delete state.walletSnapshots[id];
+        if (state.monthly.walletId === id) state.monthly.walletId = null;
+        commit('wallets');
+    }
+
+    // Guarda o valor total a cada leitura (no máximo um ponto a cada 10 minutos, até 600 pontos).
+    function addSnapshot(walletId, usd) {
+        const list = state.walletSnapshots[walletId] || (state.walletSnapshots[walletId] = []);
+        const now = Date.now();
+        const last = list[list.length - 1];
+        if (last && now - last.t < 10 * 60 * 1000) list[list.length - 1] = { t: now, usd };
+        else list.push({ t: now, usd });
+        if (list.length > 600) list.splice(0, list.length - 600);
+        save();
+    }
+
+    function walletName(id) {
+        return state.wallets.find((w) => w.id === id)?.name ?? null;
+    }
+
     // ---- Alertas ----
     function addAlert(alert) {
         state.alerts.push({ id: uid(), createdAt: Date.now(), triggeredAt: null, ...alert });
@@ -334,6 +395,12 @@ window.App = window.App || {};
             state.notes = p.notes && typeof p.notes === 'object' ? p.notes : {};
             state.plan = { ...base.plan, ...p.plan, targets: { ...p.plan?.targets } };
             state.alerts = Array.isArray(p.alerts) ? p.alerts : [];
+            state.monthly = { ...base.monthly, ...p.monthly, log: { ...p.monthly?.log } };
+            state.wallets = Array.isArray(p.wallets) ? p.wallets : [];
+            state.walletSnapshots = p.walletSnapshots ?? {};
+            state.web3Settings = { ...base.web3Settings, ...p.web3Settings, rpc: { ...p.web3Settings?.rpc } };
+            state.pools = Array.isArray(p.pools) ? p.pools : [];
+            state.poolWatch = {};
             state.transactions = result.txs;
         } else {
             const known = new Set(state.transactions.map((t) => t.id));
@@ -361,6 +428,7 @@ window.App = window.App || {};
         getList, createList, updateList, deleteList, setFavorite, moveTab,
         addToList, removeFromList, moveInList, listsOf, addWatch, setNote,
         SMART_TABS, LIST_COLORS,
+        saveWallet, removeWallet, addSnapshot, walletName,
         addAlert, removeAlert,
         exportData, parseImport, applyImport, legacyToTx, legacyLocalData,
     };

@@ -28,6 +28,12 @@
             <a class="nav-item" data-route="carteira" href="#/carteira">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="18" height="14" rx="3"/><path d="M3 10h18M16 15h2"/></svg><span>Carteira</span>
             </a>
+            <a class="nav-item" data-route="web3" href="#/web3">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2l8.5 5v10L12 22l-8.5-5V7z"/><path d="M12 22V12M20.5 7L12 12 3.5 7"/></svg><span>Web3</span>
+            </a>
+            <a class="nav-item" data-route="pools" href="#/pools">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12c2.5-3 5.5-3 9 0s6.5 3 9 0"/><path d="M3 17c2.5-3 5.5-3 9 0s6.5 3 9 0"/><path d="M8 7l4-4 4 4"/></svg><span>Pools</span>
+            </a>
             <a class="nav-item" data-route="alertas" href="#/alertas">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16V11a6 6 0 1112 0v5l2 2H4zM10 21h4"/></svg><span>Alertas</span>
             </a>
@@ -91,9 +97,10 @@
             </div>
             <p id="txPriceHint" class="footnote"></p>
             <div class="form-row">
-                <label>Taxa da corretora (US$, opcional)<input id="txFee" class="input" type="text" inputmode="decimal" autocomplete="off"></label>
+                <label>Gás e taxas (US$, opcional)<input id="txFee" class="input" type="text" inputmode="decimal" autocomplete="off"></label>
                 <label>Nota (opcional)<input id="txNote" class="input" type="text" maxlength="200" autocomplete="off"></label>
             </div>
+            <label>Carteira<select id="txWallet" class="input"></select></label>
             <p id="txPreview" class="tx-preview"></p>
             <p id="txMsg" class="form-error" role="alert"></p>
             <div class="dialog-actions">
@@ -161,6 +168,83 @@
         </form>
     </dialog>
 
+    <dialog id="walletDialog" class="dialog dialog-small" aria-labelledby="walletTitle">
+        <form id="walletForm" class="dialog-body" novalidate>
+            <h2 id="walletTitle">Adicionar carteira</h2>
+            <label>Endereço público<input id="walletAddress" class="input mono-addr" autocomplete="off" spellcheck="false" placeholder="0x…"></label>
+            <p class="footnote">Só o endereço. O painel nunca pede frase-semente nem chave privada, e não conecta nem assina nada.</p>
+            <label>Nome<input id="walletName" class="input" maxlength="40" autocomplete="off" placeholder="Ex.: MetaMask principal, Rabby, Ledger"></label>
+            <fieldset class="color-pick">
+                <legend>Redes para ler</legend>
+                <div id="walletChains" class="chain-checks"></div>
+            </fieldset>
+            <div class="dialog-actions">
+                <button id="walletDelete" class="btn btn-ghost btn-danger" type="button">Remover</button>
+                <span class="spacer"></span>
+                <button id="walletCancel" class="btn btn-ghost" type="button">Cancelar</button>
+                <button class="btn btn-primary" type="submit">Salvar e ler</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="mpDialog" class="dialog" aria-labelledby="mpTitle">
+        <form id="mpForm" class="dialog-body" novalidate>
+            <h2 id="mpTitle">Plano mensal</h2>
+            <div class="form-row">
+                <label>Valor por mês (R$)<input id="mpBudget" class="input" type="number" min="1" step="1"></label>
+                <label>Dia do aporte<select id="mpWeekday" class="input">
+                    <option value="0">Domingo</option><option value="1">Segunda</option><option value="2">Terça</option><option value="3">Quarta</option><option value="4">Quinta</option><option value="5">Sexta</option><option value="6">Sábado</option>
+                </select></label>
+            </div>
+            <div class="form-row">
+                <label>Semanas<select id="mpWeeks" class="input">
+                    <option value="four">Sempre 4 por mês</option>
+                    <option value="all">Todas do mês (4 ou 5)</option>
+                </select></label>
+                <label>Distribuição<select id="mpMode" class="input">
+                    <option value="all">Todas as criptos toda semana</option>
+                    <option value="rotate">Rodízio: cada cripto em uma semana</option>
+                </select></label>
+                <label>Ordem mínima (US$)<input id="mpMin" class="input" type="number" min="0" step="0.5"></label>
+            </div>
+            <label>Carteira padrão dos aportes<select id="mpWallet" class="input"></select></label>
+            <div class="panel-bar">
+                <h3>Criptos do plano</h3>
+                <button id="mpAdd" class="btn btn-small" type="button">Adicionar cripto</button>
+            </div>
+            <label class="switch"><input type="checkbox" id="mpCustom"><span>Definir percentuais (desligado: partes iguais)</span></label>
+            <ul id="mpAssets" class="target-list"></ul>
+            <p id="mpSum" class="plan-sum"></p>
+            <p id="mpHint" class="footnote"></p>
+            <div class="dialog-actions">
+                <button id="mpCancel" class="btn btn-ghost" type="button">Cancelar</button>
+                <button class="btn btn-primary" type="submit">Salvar plano</button>
+            </div>
+        </form>
+    </dialog>
+
+    <dialog id="mpBuyDialog" class="dialog dialog-small" aria-labelledby="mpBuyTitle">
+        <form id="mpBuyForm" class="dialog-body" novalidate>
+            <h2 id="mpBuyTitle">Registrar compra</h2>
+            <div class="form-row">
+                <label>Valor comprado (US$)<input id="mpBuyUsd" class="input" inputmode="decimal" autocomplete="off"></label>
+                <label>Preço pago (US$)<input id="mpBuyPrice" class="input" inputmode="decimal" autocomplete="off"></label>
+            </div>
+            <label>Quantidade recebida (opcional)<input id="mpBuyQty" class="input" inputmode="decimal" autocomplete="off" placeholder="Se informar, o preço é calculado a partir dela"></label>
+            <div class="form-row">
+                <label>Data<input id="mpBuyDate" class="input" type="date"></label>
+                <label>Carteira<select id="mpBuyWallet" class="input"></select></label>
+            </div>
+            <label>Gás e taxas (US$, opcional)<input id="mpBuyFee" class="input" inputmode="decimal" autocomplete="off" placeholder="0"></label>
+            <p class="tx-preview">Quantidade: <strong id="mpBuyPreview"></strong></p>
+            <p class="footnote">O preço vem preenchido com a cotação atual; troque pelo preço exato da corretora se quiser.</p>
+            <div class="dialog-actions">
+                <button id="mpBuyCancel" class="btn btn-ghost" type="button">Cancelar</button>
+                <button class="btn btn-primary" type="submit">Registrar compra</button>
+            </div>
+        </form>
+    </dialog>
+
     <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
     <script src="js/util.js"></script>
     <script src="js/coins.js"></script>
@@ -168,8 +252,15 @@
     <script src="js/store.js"></script>
     <script src="js/indicators.js"></script>
     <script src="js/charts.js"></script>
+    <script src="js/lists.js"></script>
     <script src="js/views/market.js"></script>
     <script src="js/views/asset.js"></script>
+    <script src="js/web3.js"></script>
+    <script src="js/poolmath.js"></script>
+    <script src="js/views/discover.js"></script>
+    <script src="js/views/pools.js"></script>
+    <script src="js/views/wallets.js"></script>
+    <script src="js/views/monthly.js"></script>
     <script src="js/views/portfolio.js"></script>
     <script src="js/views/alerts.js"></script>
     <script src="js/app.js"></script>

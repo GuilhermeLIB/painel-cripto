@@ -238,7 +238,7 @@ App.views = App.views || {};
             <td><span class="chip chip-${t.type === 'buy' ? 'up' : 'down'}">${t.type === 'buy' ? 'Compra' : 'Venda'}</span></td>
             <td class="col-num">${priv ? '•••' : fmt.qty(t.qty)}</td>
             <td class="col-num">${fmt.money(t.priceUsd)}</td>
-            <td class="col-num">${priv ? '•••' : (t.totalBrl ? fmt.money(t.totalBrl, 'BRL', 2) : fmt.money(t.totalUsd, 'USD', 2))}${raw(t.note ? html`<small class="muted" title="${t.note}">${t.note.length > 28 ? `${t.note.slice(0, 28)}…` : t.note}</small>` : '')}</td>
+            <td class="col-num">${priv ? '•••' : (t.totalBrl ? fmt.money(t.totalBrl, 'BRL', 2) : fmt.money(t.totalUsd, 'USD', 2))}${raw(t.walletId && store.walletName(t.walletId) ? html`<small class="muted">${store.walletName(t.walletId)}</small>` : '')}${raw(t.note ? html`<small class="muted" title="${t.note}">${t.note.length > 28 ? `${t.note.slice(0, 28)}…` : t.note}</small>` : '')}</td>
             <td class="col-actions">
                 <button class="icon-btn" type="button" data-edit="${t.id}" aria-label="Editar operação">✎</button>
                 <button class="icon-btn" type="button" data-del="${t.id}" aria-label="Apagar operação">✕</button>
@@ -247,6 +247,7 @@ App.views = App.views || {};
     }
 
     async function renderEvolution() {
+        if (!root) return;
         const el = $('#evoChart', root);
         const note = $('#evoNote', root);
         if (!S.transactions.length) {
@@ -372,6 +373,7 @@ App.views = App.views || {};
         $('#txPrice').dataset.auto = editing ? '0' : '1';
         $('#txFee').value = editing?.feeUsd || '';
         $('#txNote').value = editing?.note || '';
+        $('#txWallet').innerHTML = App.walletOptions(editing ? editing.walletId : (S.monthly?.walletId ?? null));
         $('#txMsg').textContent = '';
         updateModeLabel();
         dlg.showModal();
@@ -470,7 +472,7 @@ App.views = App.views || {};
             const available = (pos?.qty ?? 0) + (txDraft.id && txDraft.type === 'sell' ? (S.transactions.find((t) => t.id === txDraft.id)?.qty ?? 0) : 0);
             if (c.qty > available + 1e-9) { msg.textContent = `Você tem ${fmt.qty(available)} ${asset}; não dá para vender ${fmt.qty(c.qty)}.`; return; }
         }
-        store.upsertTx({ id: txDraft.id || uid(), asset, type: txDraft.type, date, note: $('#txNote').value.trim(), ...c });
+        store.upsertTx({ id: txDraft.id || uid(), asset, type: txDraft.type, date, note: $('#txNote').value.trim(), walletId: $('#txWallet').value || null, ...c });
         $('#txDialog').close();
         toast(txDraft.id ? 'Operação atualizada.' : `${txDraft.type === 'buy' ? 'Compra' : 'Venda'} de ${asset} registrada.`, 'up');
         if (location.hash.startsWith('#/carteira/novo')) history.replaceState(null, '', '#/carteira');
@@ -706,6 +708,7 @@ App.views = App.views || {};
                     <div id="pfSummary" class="pf-summary"></div>
                     <div id="allocBar" class="alloc"></div>
                 </section>
+                <section class="panel mp-panel" id="monthlyPanel"></section>
                 <div class="pf-grid">
                     <section class="panel" id="planCard"></section>
                     <section class="panel evo-panel">
@@ -798,6 +801,7 @@ App.views = App.views || {};
 
             wireTxDialog();
             wirePlanDialog();
+            App.monthly.mount($('#monthlyPanel', el));
             renderAll();
             renderTransactions();
             renderLegacyBanner();
@@ -819,6 +823,7 @@ App.views = App.views || {};
         unmount() {
             offs.forEach((off) => off());
             offs = [];
+            App.monthly.unmount();
             evoChart?.remove();
             evoChart = null;
             root = null;
