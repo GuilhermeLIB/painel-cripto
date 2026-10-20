@@ -112,6 +112,9 @@ window.App = window.App || {};
     const EVM_CHAINS = Object.keys(CHAINS).filter((k) => !CHAINS[k].solana);
     const isSolanaAddress = (value) => /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(value).trim()) && !/^0x/i.test(String(value).trim());
 
+    // Tokens "de golpe" (nome é um site ou um convite para resgatar prêmios): posições com eles são ignoradas.
+    const SPAM = /(https?:|www\.|\.(com|org|io|net|xyz|app|finance|site|top|gift)\b|claim|reward|visit|airdrop|voucher|bonus)/i;
+
     const STABLES = new Set(['USDC', 'USDT', 'DAI', 'USDE', 'USDC.E', 'USDBC', 'FDUSD', 'PYUSD', 'USDS', 'GHO', 'LUSD', 'FRAX', 'USDT0', 'USD1', 'USDG']);
 
     // ---------- ethers (carregado sob demanda) ----------
@@ -392,6 +395,7 @@ window.App = window.App || {};
         const infos = await tokenInfo(chainKey, [...new Set(active.flatMap((p) => [p.token0, p.token1]))]);
         const result = active.map((p, i) => {
             if (!slotRaw[i]) return { ...p, error: true };
+            if (SPAM.test(infos[p.token0.toLowerCase()]?.symbol ?? '') || SPAM.test(infos[p.token1.toLowerCase()]?.symbol ?? '')) return null;
             const [sqrtPriceX96, tick] = I.pool.decodeFunctionResult('slot0', slotRaw[i]);
             const [a0, a1] = amountsFromLiquidity(p.liquidity, sqrtPriceX96, p.tickLower, p.tickUpper);
             const i0 = infos[p.token0.toLowerCase()];
@@ -409,7 +413,8 @@ window.App = window.App || {};
                 inRange: Number(tick) >= p.tickLower && Number(tick) < p.tickUpper,
             };
         });
-        return closed ? [...result, { closedCount: closed, dex: dex.name }] : result;
+        const clean = result.filter(Boolean);
+        return closed ? [...clean, { closedCount: closed, dex: dex.name }] : clean;
     }
 
     async function concentrated(chainKey, owner, errors) {

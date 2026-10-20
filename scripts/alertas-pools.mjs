@@ -42,6 +42,9 @@ const SOLANA_RPCS = [env.RPC_SOLANA, 'https://solana-rpc.publicnode.com', 'https
 const BLOCKSCOUT_KEY = env.BLOCKSCOUT_KEY || '';
 const ONLY = (env.CHAINS || '').split(',').map((c) => c.trim().toLowerCase()).filter(Boolean);
 const MULTICALL3 = '0xcA11bde05977b3631167028862bE2a173976CA11';
+// Posições "de golpe": NFTs enviados sem pedir, com tokens cujo nome é um site ou um chamado
+// para resgatar prêmios. São ignoradas para não poluir os alertas.
+const SPAM = /(https?:|www\.|\.(com|org|io|net|xyz|app|finance|site|top|gift)\b|claim|reward|visit|airdrop|voucher|bonus)/i;
 const STABLE = /^(USDC|USDT|DAI|USDE|USDC\.E|USDBC|FDUSD|USDS|GHO|LUSD|FRAX|USDT0)$/i;
 
 const I = {
@@ -142,6 +145,7 @@ async function positionsOf(chainKey, owner, dex) {
     const meta = await tokenMeta(chainKey, [...new Set(pos.flatMap((p) => [p.token0, p.token1]))]);
     return pos.map((p, i) => {
         if (!slots[i]) return null;
+        if (SPAM.test(meta[p.token0.toLowerCase()]?.symbol ?? '') || SPAM.test(meta[p.token1.toLowerCase()]?.symbol ?? '')) return null;
         const { tick } = I.pool.decodeFunctionResult('slot0', slots[i]);
         const m0 = meta[p.token0.toLowerCase()];
         const m1 = meta[p.token1.toLowerCase()];
@@ -172,7 +176,12 @@ async function positions(chainKey, owner) {
 let solanaCore = null;
 async function solana() {
     if (solanaCore) return solanaCore;
-    const web3 = await import('@solana/web3.js');
+    let web3;
+    try {
+        web3 = await import('@solana/web3.js');
+    } catch {
+        throw new Error('biblioteca @solana/web3.js não instalada. No arquivo .github/workflows/alertas-pools.yml, a linha do npm install precisa terminar com "ethers@6.13.4 @solana/web3.js@1.98.0".');
+    }
     await import(new URL('../js/solana-core.js', import.meta.url));
     const rpc = async (method, params) => {
         let last;
