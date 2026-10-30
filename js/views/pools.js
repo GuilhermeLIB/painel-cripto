@@ -535,7 +535,9 @@ App.views = App.views || {};
         const el = $('#rpBody', root);
         if (!el) return;
         const list = monitored().filter((x) => x.onchain);
-        const m = list.find((x) => x.key === reportKey) ?? (reportKey ? null : list[0]);
+        const ranked = [...list].sort((x, y) => (Number(Boolean(S.poolDeposits?.[y.key])) - Number(Boolean(S.poolDeposits?.[x.key])))
+            || (Number(y.price >= y.lower && y.price <= y.upper) - Number(x.price >= x.lower && x.price <= x.upper)) || ((y.usd ?? 0) - (x.usd ?? 0)));
+        const m = list.find((x) => x.key === reportKey) ?? ranked[0];
         if (!m) {
             el.innerHTML = S.wallets.length
                 ? '<p class="muted">Lendo as carteiras… Se a posição não aparecer, confira em Minhas pools.</p>'
@@ -543,10 +545,11 @@ App.views = App.views || {};
             return;
         }
         reportKey = m.key;
-        const usdB = isStable(m.b) ? 1 : App.priceOf(under(m.b)) ?? null;
+        const valueB = m.qtyA * m.price + m.qtyB;
+        // Sem cotação direta do token B: usa o valor em dólar que a leitura da carteira já calculou.
+        const usdB = isStable(m.b) ? 1 : App.priceOf(under(m.b)) ?? (m.usd && valueB ? m.usd / valueB : null);
         const toUsd = (vB) => (usdB ? vB * usdB : null);
         const dep = S.poolDeposits?.[m.key];
-        const valueB = m.qtyA * m.price + m.qtyB;
         const feesB = (m.feeA ?? 0) * m.price + (m.feeB ?? 0) + (dep?.collectedUsd && usdB ? dep.collectedUsd / usdB : 0);
         const holdB = dep ? dep.qtyA * m.price + dep.qtyB : null;
         const depB = dep?.priceEntry ? dep.qtyA * dep.priceEntry + dep.qtyB : null;
@@ -583,7 +586,7 @@ App.views = App.views || {};
             <div class="rp-kpis">
                 <div class="panel"><span class="pf-label">Valor da posição</span><strong class="rp-big">${usd(valueB)}</strong><span class="muted small">${fmt.qty(m.qtyA)} ${m.a} + ${fmt.qty(m.qtyB)} ${m.b}</span></div>
                 <div class="panel"><span class="pf-label">Taxas ganhas</span><strong class="rp-big">${usd(feesB)}</strong><span class="muted small">${ratePerDayB !== null ? `≈ ${usd(ratePerDayB)} por dia` : 'ritmo aparece após 1 h de histórico'}</span></div>
-                <div class="panel"><span class="pf-label">Contra só segurar</span><strong class="rp-big delta-${toneOf(res)}">${res === null ? '—' : sUsd(res)}</strong><span class="muted small">${res === null ? html`<button class="link-btn" type="button" data-dep="${m.key}">informe o depósito inicial</button>` : `${fmt.pct((valueB + feesB) / holdB * 100 - 100, 2)} contra segurar`}</span></div>
+                <div class="panel"><span class="pf-label">Contra só segurar</span><strong class="rp-big delta-${toneOf(res)}">${res === null ? '—' : sUsd(res)}</strong><span class="muted small">${raw(res === null ? html`<button class="link-btn" type="button" data-dep="${m.key}">informe o depósito inicial</button>` : html`${fmt.pct((valueB + feesB) / holdB * 100 - 100, 2)} contra segurar`)}</span></div>
                 <div class="panel"><span class="pf-label">Contra ter ficado em dólar</span><strong class="rp-big delta-${toneOf(vsUsd)}">${vsUsd === null ? '—' : sUsd(vsUsd)}</strong><span class="muted small">${vsUsd === null ? 'informe o preço de entrada no depósito' : `${fmt.pct((valueB + feesB) / depB * 100 - 100, 2)} sobre o depositado`}</span></div>
             </div>
             <section class="panel">
@@ -611,6 +614,7 @@ App.views = App.views || {};
                     <div id="rpExp"><p class="muted">Buscando o APR da pool…</p></div>
                 </section>
             </div>
+            <p class="footnote">Não é a pool que você procura? O relatório mostra as posições das carteiras cadastradas. Confira em <a href="#/config">Configurações</a> se a carteira dela está lá com a rede certa marcada (por exemplo, Base).</p>
             <section class="panel">
                 <h3 class="panel-title">Evolução</h3>
                 <p class="muted small">${dep ? 'Pool + taxas contra só segurar, a cada leitura da carteira.' : 'Valor da posição + taxas, a cada leitura da carteira.'}</p>
@@ -621,21 +625,21 @@ App.views = App.views || {};
         renderExpectation(m, valueB, ratePerDayB, aprReal, usd);
     }
 
+    // Barra da faixa em HTML (o texto não muda de tamanho com a largura da tela).
     function rangeSvg(m, status) {
-        const W = 640, H = 80, pad = 14;
-        const lo = Math.min(m.lower, m.price) * 0.97, hi = Math.max(m.upper, m.price) * 1.03;
-        const x = (v) => pad + (Math.log(v) - Math.log(lo)) / (Math.log(hi) - Math.log(lo)) * (W - 2 * pad);
-        const col = status === 'centro' ? 'var(--up)' : status.startsWith('borda') ? 'var(--warn)' : 'var(--down)';
-        const label = (v) => esc(px2(v, m.b));
-        return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Preço dentro da faixa">
-            <rect x="${pad}" y="32" width="${W - 2 * pad}" height="12" rx="6" fill="var(--surface-3)"/>
-            <rect x="${x(m.lower)}" y="32" width="${x(m.upper) - x(m.lower)}" height="12" rx="6" fill="${col}" opacity="0.35"/>
-            <line x1="${x(m.lower)}" x2="${x(m.lower)}" y1="26" y2="50" stroke="var(--ink-3)"/><line x1="${x(m.upper)}" x2="${x(m.upper)}" y1="26" y2="50" stroke="var(--ink-3)"/>
-            <text x="${x(m.lower)}" y="68" text-anchor="middle" font-size="12" fill="var(--ink-3)">${label(m.lower)}</text>
-            <text x="${x(m.upper)}" y="68" text-anchor="middle" font-size="12" fill="var(--ink-3)">${label(m.upper)}</text>
-            <line x1="${x(m.price)}" x2="${x(m.price)}" y1="20" y2="56" stroke="var(--ink)" stroke-width="3" stroke-linecap="round"/>
-            <text x="${x(m.price)}" y="14" text-anchor="middle" font-size="12" font-weight="700" fill="var(--ink)">agora ${label(m.price)}</text>
-        </svg>`;
+        const lo = Math.min(m.lower, m.price) / 1.03, hi = Math.max(m.upper, m.price) * 1.03;
+        const pct = (v) => ((Math.log(v) - Math.log(lo)) / (Math.log(hi) - Math.log(lo))) * 100;
+        const col = status === 'centro' ? 'up' : status.startsWith('borda') ? 'warn' : 'down';
+        const nowPct = Math.max(1, Math.min(99, pct(m.price)));
+        return html`<div class="rp-bar">
+            <span class="rp-bar-now-label" style="left:${nowPct}%">agora ${px2(m.price, m.b)}</span>
+            <div class="rp-bar-track">
+                <span class="rp-bar-range rp-${col}" style="left:${pct(m.lower)}%;width:${pct(m.upper) - pct(m.lower)}%"></span>
+                <span class="rp-bar-now" style="left:${nowPct}%"></span>
+            </div>
+            <span class="rp-bar-edge" style="left:${pct(m.lower)}%">${px2(m.lower, m.b)}</span>
+            <span class="rp-bar-edge" style="left:${pct(m.upper)}%">${px2(m.upper, m.b)}</span>
+        </div>`;
     }
 
     function renderReportChart(m, hist, dep, usdB) {

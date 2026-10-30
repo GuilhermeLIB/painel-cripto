@@ -852,6 +852,13 @@ a.icon-btn { text-decoration: none; }
 .rp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
 .rp-grid > * { min-width: 0; }
 .rp-chart { height: 260px; }
+.rp-bar { position: relative; padding: 26px 0 26px; margin: 6px 8px 10px; }
+.rp-bar-track { position: relative; height: 12px; border-radius: 6px; background: var(--surface-3); }
+.rp-bar-range { position: absolute; top: 0; bottom: 0; border-radius: 6px; opacity: 0.45; }
+.rp-bar-range.rp-up { background: var(--up); } .rp-bar-range.rp-warn { background: var(--warn); } .rp-bar-range.rp-down { background: var(--down); }
+.rp-bar-now { position: absolute; top: -8px; bottom: -8px; width: 3px; margin-left: -1.5px; border-radius: 2px; background: var(--ink); }
+.rp-bar-now-label { position: absolute; top: 0; transform: translateX(-50%); font-size: 12.5px; font-weight: 700; white-space: nowrap; }
+.rp-bar-edge { position: absolute; bottom: 0; transform: translateX(-50%); font-size: 12px; color: var(--ink-3); white-space: nowrap; }
 
 /* ---------- Responsivo ---------- */
 @media (max-width: 1280px) {

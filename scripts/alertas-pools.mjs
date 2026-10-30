@@ -109,9 +109,10 @@ async function tokenMeta(chainKey, addresses) {
 
 async function enumerate(chainKey, contract, owner) {
     const [countRaw] = await multicall(chainKey, [{ target: contract, data: I.npm.encodeFunctionData('balanceOf', [owner]) }]);
-    const count = countRaw ? Math.min(50, Number(I.npm.decodeFunctionResult('balanceOf', countRaw)[0])) : 0;
+    const total = countRaw ? Number(I.npm.decodeFunctionResult('balanceOf', countRaw)[0]) : 0;
+    const count = Math.min(80, total);
     if (!count) return [];
-    return (await multicall(chainKey, Array.from({ length: count }, (_, i) => ({ target: contract, data: I.npm.encodeFunctionData('tokenOfOwnerByIndex', [owner, i]) }))))
+    return (await multicall(chainKey, Array.from({ length: count }, (_, i) => ({ target: contract, data: I.npm.encodeFunctionData('tokenOfOwnerByIndex', [owner, total - 1 - i]) }))))
         .filter(Boolean).map((r) => I.npm.decodeFunctionResult('tokenOfOwnerByIndex', r)[0]);
 }
 

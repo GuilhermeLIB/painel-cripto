@@ -355,9 +355,11 @@ window.App = window.App || {};
         const I = ifaces(E);
         const [countRaw] = await multicall(chainKey, [{ target: contract, data: I.npm.encodeFunctionData('balanceOf', [owner]) }]);
         if (!countRaw) return [];
-        const count = Math.min(40, Number(I.npm.decodeFunctionResult('balanceOf', countRaw)[0]));
+        // Lê as mais novas primeiro (índices do fim): quem monta e desmonta muito acumula NFTs antigos vazios.
+        const total = Number(I.npm.decodeFunctionResult('balanceOf', countRaw)[0]);
+        const count = Math.min(80, total);
         if (!count) return [];
-        const idsRaw = await multicall(chainKey, Array.from({ length: count }, (_, i) => ({ target: contract, data: I.npm.encodeFunctionData('tokenOfOwnerByIndex', [owner, i]) })));
+        const idsRaw = await multicall(chainKey, Array.from({ length: count }, (_, i) => ({ target: contract, data: I.npm.encodeFunctionData('tokenOfOwnerByIndex', [owner, total - 1 - i]) })));
         return idsRaw.filter(Boolean).map((r) => I.npm.decodeFunctionResult('tokenOfOwnerByIndex', r)[0]);
     }
 
