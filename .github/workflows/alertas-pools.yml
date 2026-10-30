@@ -56,6 +56,8 @@ jobs:
           CHAINS: ${{ vars.CHAINS }}
           EDGE_PCT: ${{ vars.EDGE_PCT }}
           HF_MIN: ${{ vars.HF_MIN }}
+          REPORT: ${{ vars.REPORT }}
+          POOL_DEPOSITS: ${{ vars.POOL_DEPOSITS }}
           TESTE: ${{ inputs.teste }}
 
       - name: Guardar o estado para a próxima verificação
