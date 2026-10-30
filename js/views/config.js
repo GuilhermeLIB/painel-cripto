@@ -25,6 +25,19 @@ App.views = App.views || {};
         renderTelegram();
     }
 
+    // Converte os depósitos informados no painel para o formato que o robô do GitHub lê:
+    // {"base:uniswap-v3:4261403": {"a": 0.399, "b": 784.18, "price": 2232.68, "collected": 0}}
+    function depositsVar() {
+        const out = {};
+        Object.entries(S.poolDeposits ?? {}).forEach(([key, d]) => {
+            const m = key.match(/^chain:([^:]+):(.+):([^:]+)$/);
+            if (!m) return;
+            const slug = m[2].toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+            out[`${m[1]}:${slug}:${m[3]}`] = { a: d.qtyA, b: d.qtyB, ...(d.priceEntry ? { price: d.priceEntry } : {}), ...(d.collectedUsd ? { collected: d.collectedUsd } : {}) };
+        });
+        return Object.keys(out).length ? JSON.stringify(out) : '';
+    }
+
     function renderTelegram() {
         const el = $('#cfgTelegram', root);
         if (!el) return;
@@ -37,6 +50,7 @@ App.views = App.views || {};
                 <li>No GitHub: Settings → Secrets and variables → Actions → <strong>Secrets</strong>: crie <code>TELEGRAM_BOT_TOKEN</code>, <code>TELEGRAM_CHAT_ID</code> e <code>WALLETS</code>.</li>
                 <li>Em Actions → “Alertas de pools”, rode “Run workflow” uma vez para testar.</li>
             </ol>
+            ${raw(depositsVar() ? html`<label class="w3-key">Valor para a variável POOL_DEPOSITS (resumo de hora em hora com “contra só segurar”)<span class="inline-form"><input class="input input-small mono-addr" readonly value="${depositsVar()}"><button class="btn btn-small" type="button" data-copy="${depositsVar()}">Copiar</button></span></label><p class="muted small">Em GitHub → Settings → Secrets and variables → Actions → aba <strong>Variables</strong> → New repository variable. Gerado a partir dos depósitos que você informou nas pools.</p>` : '<p class="muted small">Para o resumo de hora em hora mostrar “contra só segurar”, informe o depósito inicial no cartão da pool (Pools → Minhas pools) e volte aqui para copiar a variável POOL_DEPOSITS.</p>')}
             ${raw(addrs ? html`<label class="w3-key">Valor para o segredo WALLETS<span class="inline-form"><input class="input input-small mono-addr" readonly value="${addrs}"><button class="btn btn-small" type="button" data-copy="${addrs}">Copiar</button></span></label>` : '')}`;
     }
 
@@ -88,7 +102,7 @@ App.views = App.views || {};
             renderWallets();
             App.views.alertas.mount($('#cfgAlerts', el), [], { embedded: true });
             App.w3Settings.mount($('#cfgSources', el));
-            offs = [bus.on('wallets', renderWallets)];
+            offs = [bus.on('wallets', renderWallets), bus.on('pools', renderTelegram)];
         },
         unmount() {
             offs.forEach((o) => o());

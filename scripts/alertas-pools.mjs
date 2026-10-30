@@ -41,6 +41,11 @@ const CHAINS = {
 };
 const SOLANA_RPCS = [env.RPC_SOLANA, 'https://solana-rpc.publicnode.com', 'https://api.mainnet-beta.solana.com'].filter(Boolean);
 const BLOCKSCOUT_KEY = env.BLOCKSCOUT_KEY || '';
+// Resumo de hora em hora (desligue com a variável REPORT=off) e depósitos para "contra só segurar".
+const REPORT = (env.REPORT || 'hourly').toLowerCase();
+let DEPOSITS = {};
+try { DEPOSITS = env.POOL_DEPOSITS ? JSON.parse(env.POOL_DEPOSITS) : {}; } catch { console.log('POOL_DEPOSITS inválido (precisa ser JSON); resumo sem "contra só segurar".'); }
+const GT_NET = { ethereum: 'eth', arbitrum: 'arbitrum', base: 'base', optimism: 'optimism', polygon: 'polygon_pos', bnb: 'bsc', zksync: 'zksync', solana: 'solana' };
 const ONLY = (env.CHAINS || '').split(',').map((c) => c.trim().toLowerCase()).filter(Boolean);
 const MULTICALL3 = '0xcA11bde05977b3631167028862bE2a173976CA11';
 // Posições "de golpe": NFTs enviados sem pedir, com tokens cujo nome é um site ou um chamado
@@ -62,7 +67,8 @@ const I = {
         'function positions(uint256 tokenId) view returns (uint96 nonce, address operator, address token0, address token1, uint24 fee, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)',
     ]),
     factory: new ethers.Interface(['function getPool(address,address,uint24) view returns (address)']),
-    pool: new ethers.Interface(['function slot0() view returns (uint160 sqrtPriceX96, int24 tick)']),
+    pool: new ethers.Interface(['function slot0() view returns (uint160 sqrtPriceX96, int24 tick)', 'function feeGrowthGlobal0X128() view returns (uint256)', 'function feeGrowthGlobal1X128() view returns (uint256)', 'function fee() view returns (uint24)']),
+    ticks: new ethers.Interface(['function ticks(int24 tick) view returns (uint128 liquidityGross, int128 liquidityNet, uint256 feeGrowthOutside0X128, uint256 feeGrowthOutside1X128)']),
 };
 
 async function rpc(chainKey, method, params) {
@@ -144,6 +150,17 @@ async function positionsOf(chainKey, owner, dex) {
         .map((r) => (r ? factoryAbi.decodeFunctionResult('getPool', r)[0] : null));
     const slots = await multicall(chainKey, pools.map((p) => ({ target: p ?? (CHAINS[chainKey].multicall ?? MULTICALL3), data: I.pool.encodeFunctionData('slot0', []) })));
     const meta = await tokenMeta(chainKey, [...new Set(pos.flatMap((p) => [p.token0, p.token1]))]);
+    // Taxas acumuladas (fórmula feeGrowthInside da Uniswap v3); no Aerodrome usa as já registradas.
+    const target = (i) => pools[i] ?? (CHAINS[chainKey].multicall ?? MULTICALL3);
+    const extra = await multicall(chainKey, pos.flatMap((p, i) => [
+        { target: target(i), data: I.pool.encodeFunctionData('feeGrowthGlobal0X128', []) },
+        { target: target(i), data: I.pool.encodeFunctionData('feeGrowthGlobal1X128', []) },
+        { target: target(i), data: I.ticks.encodeFunctionData('ticks', [p.tickLower]) },
+        { target: target(i), data: I.ticks.encodeFunctionData('ticks', [p.tickUpper]) },
+        { target: target(i), data: I.pool.encodeFunctionData('fee', []) },
+    ])).catch(() => []);
+    const MOD = 2n ** 256n;
+    const sub = (x, y) => ((x - y) % MOD + MOD) % MOD;
     return pos.map((p, i) => {
         if (!slots[i]) return null;
         if (SPAM.test(meta[p.token0.toLowerCase()]?.symbol ?? '') || SPAM.test(meta[p.token1.toLowerCase()]?.symbol ?? '')) return null;
@@ -151,7 +168,27 @@ async function positionsOf(chainKey, owner, dex) {
         const m0 = meta[p.token0.toLowerCase()];
         const m1 = meta[p.token1.toLowerCase()];
         const scale = 10 ** (m0.decimals - m1.decimals);
-        return describe({ owner, chain: chainKey, chainName: CHAINS[chainKey].name, dex: dex.name, id: p.id, sym0: m0.symbol, sym1: m1.symbol, fee: slip ? null : Number(p.fee) / 10000, lower: 1.0001 ** Number(p.tickLower) * scale, upper: 1.0001 ** Number(p.tickUpper) * scale, price: 1.0001 ** Number(tick) * scale, frac: (Number(tick) - Number(p.tickLower)) / (Number(p.tickUpper) - Number(p.tickLower)) });
+        const { sqrtPriceX96 } = I.pool.decodeFunctionResult('slot0', slots[i]);
+        // Quantidades pela liquidez.
+        const L = Number(p.liquidity);
+        const sp = Number(sqrtPriceX96) / 2 ** 96, sa = Math.sqrt(1.0001 ** Number(p.tickLower)), sb = Math.sqrt(1.0001 ** Number(p.tickUpper));
+        const [r0, r1] = sp <= sa ? [L * (sb - sa) / (sa * sb), 0] : sp < sb ? [L * (sb - sp) / (sp * sb), L * (sp - sa)] : [0, L * (sb - sa)];
+        let owed0 = p.tokensOwed0, owed1 = p.tokensOwed1;
+        const e = extra.slice(i * 5, i * 5 + 5);
+        if (!slip && e[0] && e[1] && e[2] && e[3]) {
+            try {
+                const g0 = I.pool.decodeFunctionResult('feeGrowthGlobal0X128', e[0])[0];
+                const g1 = I.pool.decodeFunctionResult('feeGrowthGlobal1X128', e[1])[0];
+                const lo = I.ticks.decodeFunctionResult('ticks', e[2]);
+                const up = I.ticks.decodeFunctionResult('ticks', e[3]);
+                const t = Number(tick);
+                const inside = (g, oLo, oUp) => sub(sub(g, t >= Number(p.tickLower) ? oLo : sub(g, oLo)), t < Number(p.tickUpper) ? oUp : sub(g, oUp));
+                owed0 = p.tokensOwed0 + p.liquidity * sub(inside(g0, lo[2], up[2]), p.feeGrowthInside0LastX128) / 2n ** 128n;
+                owed1 = p.tokensOwed1 + p.liquidity * sub(inside(g1, lo[3], up[3]), p.feeGrowthInside1LastX128) / 2n ** 128n;
+            } catch { /* mantém as taxas registradas */ }
+        }
+        const feePct = slip ? (e[4] ? Number(I.pool.decodeFunctionResult('fee', e[4])[0]) / 10000 : null) : Number(p.fee) / 10000;
+        return describe({ owner, chain: chainKey, chainName: CHAINS[chainKey].name, dex: dex.name, id: p.id, sym0: m0.symbol, sym1: m1.symbol, fee: feePct, lower: 1.0001 ** Number(p.tickLower) * scale, upper: 1.0001 ** Number(p.tickUpper) * scale, price: 1.0001 ** Number(tick) * scale, frac: (Number(tick) - Number(p.tickLower)) / (Number(p.tickUpper) - Number(p.tickLower)), amount0: r0 / 10 ** m0.decimals, amount1: r1 / 10 ** m1.decimals, owed0: Number(owed0) / 10 ** m0.decimals, owed1: Number(owed1) / 10 ** m1.decimals, pool: pools[i] });
     }).filter(Boolean);
 }
 
@@ -164,7 +201,14 @@ function describe(x) {
     // "por baixo"/"por cima" no sentido do preço exibido (token volátil cotado na stablecoin).
     const flipped = a !== x.sym0;
     const below = x.frac < 0;
-    return { key: `${x.owner}:${x.chain}:${x.dex}:${x.id}`, id: x.id, chain: x.chain, chainName: x.chainName, dex: x.dex, pair: `${a}/${b}`, fee: x.fee, lower: pl, upper: pu, price: pn, status, side: (below !== flipped) ? 'baixo' : 'cima' };
+    const has = Number.isFinite(x.amount0) && Number.isFinite(x.amount1);
+    return {
+        key: `${x.owner}:${x.chain}:${x.dex}:${x.id}`, id: x.id, chain: x.chain, chainName: x.chainName, dex: x.dex, a, b, pair: `${a}/${b}`, fee: x.fee, lower: pl, upper: pu, price: pn, status, side: (below !== flipped) ? 'baixo' : 'cima',
+        frac: Math.max(-1, Math.min(2, x.frac)), pool: x.pool ?? null,
+        depKey: `${x.chain}:${String(x.dex).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')}:${x.id}`,
+        qtyA: has ? (flipped ? x.amount1 : x.amount0) : null, qtyB: has ? (flipped ? x.amount0 : x.amount1) : null,
+        feeA: has ? (flipped ? x.owed1 : x.owed0) ?? 0 : null, feeB: has ? (flipped ? x.owed0 : x.owed1) ?? 0 : null,
+    };
 }
 
 async function positions(chainKey, owner) {
@@ -223,6 +267,7 @@ async function solanaPositions(owner, errors) {
         sym0: sym[p.token0] ?? globalThis.SolanaCore.KNOWN_MINTS[p.token0] ?? p.token0.slice(0, 4), sym1: sym[p.token1] ?? globalThis.SolanaCore.KNOWN_MINTS[p.token1] ?? p.token1.slice(0, 4),
         fee: p.fee !== null && p.fee !== undefined ? p.fee / 10000 : null,
         lower: p.priceLower, upper: p.priceUpper, price: p.priceNow, frac: p.rangePos,
+        amount0: p.amount0 ?? NaN, amount1: p.amount1 ?? NaN, owed0: p.owed0 ?? 0, owed1: p.owed1 ?? 0,
     }));
 }
 
@@ -262,6 +307,68 @@ function saveState(state) {
     fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
+async function poolApr(p) {
+    if (!p.pool || !GT_NET[p.chain] || !p.fee) return null;
+    try {
+        const r = await fetch(`https://api.geckoterminal.com/api/v2/networks/${GT_NET[p.chain]}/pools/${p.pool}`, { headers: { accept: 'application/json' } });
+        if (!r.ok) return null;
+        const a = (await r.json()).data?.attributes ?? {};
+        const tvl = Number(a.reserve_in_usd) || 0;
+        const vol = Number(a.volume_usd?.h24) || 0;
+        return tvl ? vol * p.fee / 100 / tvl * 365 * 100 : null;
+    } catch { return null; }
+}
+
+const money = (v) => `US$ ${num(v, 2)}`;
+const smoney = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}US$ ${num(Math.abs(v), 2)}`;
+const spct = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${num(Math.abs(v), 2)}%`;
+
+async function hourlyReport(items, next) {
+    const hora = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' }).format(new Date());
+    const blocks = [];
+    for (const { p } of items) {
+        const usdB = STABLE.test(p.b) ? 1 : null;
+        const fmtB = (v) => (usdB ? money(v) : `${num(v, 4)} ${p.b}`);
+        const sfmtB = (v) => (usdB ? smoney(v) : `${v >= 0 ? '+' : '−'}${num(Math.abs(v), 4)} ${p.b}`);
+        const where = p.frac < 0 ? 'fora, abaixo' : p.frac >= 1 ? 'fora, acima' : p.frac < 0.2 ? 'perto da borda de baixo' : p.frac > 0.8 ? 'perto da borda de cima' : 'centro';
+        const lines = [
+            `<b>${esc(p.pair)}</b> · ${p.chainName} · ${esc(p.dex)}${p.fee ? ` · ${num(p.fee, 2)}%` : ''}`,
+            `Preço ${esc(fmtP(p.price, p.pair))} · ${num(Math.max(-99, Math.min(199, p.frac * 100)), 0)}% da faixa (${where})`,
+            `Faixa ${esc(fmtP(p.lower, p.pair))} – ${esc(fmtP(p.upper, p.pair))}`,
+        ];
+        if (p.qtyA !== null) {
+            const valueB = p.qtyA * p.price + p.qtyB;
+            const st = next[p.key] ?? {};
+            const dep = DEPOSITS[p.depKey];
+            const feesB = st.feesB + (dep?.collected && usdB ? dep.collected / usdB : 0);
+            lines.push(`Posição ${fmtB(valueB)} (${num(p.qtyA, 4)} ${esc(p.a)} + ${num(p.qtyB, 2)} ${esc(p.b)})`);
+            let feeLine = `Taxas ${fmtB(feesB)}`;
+            let rate = null;
+            if (st.prevFeesB !== null && st.prevFeesAt && st.feesB >= st.prevFeesB) {
+                const h = (st.feesAt - st.prevFeesAt) / 3600000;
+                if (h > 0.2) { rate = (st.feesB - st.prevFeesB) / h; feeLine += ` (${sfmtB(st.feesB - st.prevFeesB)} desde a última verificação)`; }
+            }
+            lines.push(feeLine);
+            if (dep && Number.isFinite(dep.a) && Number.isFinite(dep.b)) {
+                const holdB = dep.a * p.price + dep.b;
+                lines.push(`Contra só segurar: <b>${sfmtB(valueB + feesB - holdB)}</b> (${spct((valueB + feesB) / holdB * 100 - 100)})`);
+                if (dep.price) {
+                    const depB = dep.a * dep.price + dep.b;
+                    lines.push(`Contra ter ficado em dólar: ${sfmtB(valueB + feesB - depB)} (${spct((valueB + feesB) / depB * 100 - 100)})`);
+                }
+            }
+            const apr = await poolApr(p);
+            const aprReal = rate !== null && valueB ? rate * 24 * 365 / valueB * 100 : null;
+            if (apr !== null || aprReal !== null) {
+                lines.push([apr !== null ? `APR da pool ${num(apr, 0)}%` : null, aprReal !== null ? `seu ritmo na última hora ${num(aprReal, 0)}%` : null].filter(Boolean).join(' · '));
+                if (apr !== null) lines.push(`Expectativa no mês (APR da pool, 70% do tempo na faixa): ${fmtB(valueB * apr * 0.7 / 100 / 12)}`);
+            }
+        }
+        blocks.push(lines.join('\n'));
+    }
+    return `📊 <b>Resumo das pools</b> · ${hora}\n\n${blocks.join('\n\n')}`;
+}
+
 function posMessage(p, head, remind, owner) {
     const fee = p.fee !== null && p.fee !== undefined ? ` · taxa ${p.fee.toLocaleString('pt-BR')}%` : '';
     return `${head}${remind ? ' (lembrete: continua fora)' : ''}\n${p.chainName} · ${esc(p.dex)}${fee} · posição ${esc(String(p.id).length > 12 ? short(String(p.id)) : `#${p.id}`)} · ${short(owner)}\nFaixa: ${esc(fmtP(p.lower, p.pair))} – ${esc(fmtP(p.upper, p.pair))}\nAgora: ${esc(fmtP(p.price, p.pair))}`;
@@ -279,8 +386,10 @@ async function main() {
     const now = Date.now();
     const summary = [];
 
+    const reportItems = [];
     const handle = (pos, owner) => {
         for (const p of pos) {
+            reportItems.push({ p, owner });
             const before = prev[p.key];
             const remind = p.status === 'fora' && before?.status === 'fora' && now - (before.notifiedAt ?? 0) > REMIND_HOURS * 3600000;
             const changed = !before || before.status !== p.status;
@@ -290,7 +399,8 @@ async function main() {
                 messages.push(posMessage(p, head, remind, owner));
                 notifiedAt = now;
             }
-            next[p.key] = { status: p.status, notifiedAt, since: changed ? now : (before?.since ?? now) };
+            const feesB = p.qtyA !== null ? (p.feeA ?? 0) * p.price + (p.feeB ?? 0) : null;
+            next[p.key] = { status: p.status, notifiedAt, since: changed ? now : (before?.since ?? now), feesB, feesAt: now, prevFeesB: before?.feesB ?? null, prevFeesAt: before?.feesAt ?? null };
             summary.push(`${p.pair} (${p.chainName} · ${p.dex}): ${{ ok: 'na faixa', borda: 'perto da borda', fora: 'fora da faixa' }[p.status]}`);
         }
     };
@@ -334,6 +444,7 @@ async function main() {
     if (TEST) {
         messages.unshift(`✅ <b>Alertas de pools ativos</b>\n${WALLETS.length} carteira(s) EVM em ${chains.length} rede(s)${SOLANA.length ? ` e ${SOLANA.length} carteira(s) Solana` : ''}.\n${summary.length ? esc(summary.join('\n')) : 'Nenhuma pool com liquidez ou dívida no Aave encontrada.'}${errors.length ? `\n\nAvisos de leitura:\n${esc(errors.join('\n'))}` : ''}`);
     }
+    if (REPORT !== 'off' && reportItems.length) messages.push(await hourlyReport(reportItems, next));
     for (const m of messages) await telegram(m);
     saveState(next);
     console.log(`Posições verificadas: ${summary.length}. Mensagens enviadas: ${messages.length}.`);

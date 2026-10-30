@@ -692,7 +692,7 @@ textarea.input { resize: vertical; font-size: 14px; line-height: 1.45; }
 .pl-facts span { font-size: 12px; }
 .pl-facts strong { font-size: 16px; }
 .pl-facts small { font-size: 11.5px; }
-.pl-profiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+.pl-profiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 18px; }
 .pl-card { display: grid; gap: 6px; align-content: start; text-align: left; padding: 14px; border-radius: var(--radius-lg); border: 1.5px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; }
 .pl-card:hover { border-color: var(--line-strong); }
 .pl-card.is-on { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 8%, var(--surface)); }
@@ -826,6 +826,32 @@ a.icon-btn { text-decoration: none; }
 .sig-more { margin-top: 12px; font-size: 13.5px; }
 .sig-more > summary { cursor: pointer; font-weight: 600; color: var(--ink-2); }
 .sig-more[open] > summary { margin-bottom: 10px; }
+
+.pl-hold { padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface); border: 1px solid var(--line); }
+.pl-hold-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.pl-hold dl { display: grid; grid-template-columns: 1fr auto; gap: 3px 12px; margin: 0; font-size: 13px; }
+.pl-hold dt { color: var(--ink-3); }
+.pl-hold dd { margin: 0; text-align: right; font-weight: 600; }
+.pl-hold dd small { font-weight: 500; margin-left: 4px; }
+.pl-hold-empty { font-size: 13px; color: var(--ink-3); }
+
+/* ---------- Relatório da pool ---------- */
+.rp { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+.rp > * { min-width: 0; }
+.rp-head { display: grid; gap: 8px; }
+.rp-title h2 { font-size: 20px; }
+.rp-take { font-size: 16px; margin: 0; }
+.rp-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.rp-kpis > .panel { display: grid; gap: 4px; align-content: start; }
+.rp-big { font-family: var(--font-display); font-size: 24px; font-variant-numeric: tabular-nums; }
+.rp-range { margin: 10px 0 6px; }
+.rp-dl { display: grid; grid-template-columns: 1fr auto; gap: 6px 16px; margin: 0; font-size: 14px; font-variant-numeric: tabular-nums; }
+.rp-dl dt { color: var(--ink-3); }
+.rp-dl dd { margin: 0; text-align: right; font-weight: 600; }
+.rp-total { border-top: 1px solid var(--line); padding-top: 6px; }
+.rp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.rp-grid > * { min-width: 0; }
+.rp-chart { height: 260px; }
 
 /* ---------- Responsivo ---------- */
 @media (max-width: 1280px) {

@@ -188,6 +188,23 @@
         </form>
     </dialog>
 
+    <dialog id="depDialog" class="dialog dialog-small" aria-labelledby="depTitle">
+        <form id="depForm" class="dialog-body" novalidate>
+            <h2 id="depTitle">Depósito inicial</h2>
+            <label><span id="depALabel">Quantidade do token</span><input id="depA" class="input" inputmode="decimal" autocomplete="off"></label>
+            <label><span id="depBLabel">Quantidade da stablecoin</span><input id="depB" class="input" inputmode="decimal" autocomplete="off"></label>
+            <label><span id="depPriceLabel">Preço no depósito (opcional)</span><input id="depPrice" class="input" inputmode="decimal" autocomplete="off"></label>
+            <label>Taxas já coletadas antes (US$, opcional)<input id="depCollected" class="input" inputmode="decimal" autocomplete="off" placeholder="0"></label>
+            <p id="depHint" class="footnote"></p>
+            <div class="dialog-actions">
+                <button id="depClear" class="btn btn-ghost btn-danger" type="button">Remover</button>
+                <span class="spacer"></span>
+                <button id="depCancel" class="btn btn-ghost" type="button">Cancelar</button>
+                <button class="btn btn-primary" type="submit">Salvar</button>
+            </div>
+        </form>
+    </dialog>
+
     <dialog id="mpDialog" class="dialog" aria-labelledby="mpTitle">
         <form id="mpForm" class="dialog-body" novalidate>
             <h2 id="mpTitle">Plano mensal</h2>

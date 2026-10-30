@@ -48,6 +48,8 @@ Opcionais:
 |---|---|
 | `RPC_ETHEREUM`, `RPC_ARBITRUM`, `RPC_BASE`, `RPC_OPTIMISM`, `RPC_POLYGON`, `RPC_BNB`, `RPC_ZKSYNC`, `RPC_SOLANA` (segredos) | URL de RPC própria se os RPCs públicos falharem. Para a Meteora, um RPC próprio de Solana costuma ser necessário |
 | `BLOCKSCOUT_KEY` (segredo) | chave gratuita do Blockscout; ajuda a achar posições do Aerodrome em staking |
+| `REPORT` (em *Variables*) | resumo de hora em hora das pools no Telegram; `off` desliga (padrão: ligado) |
+| `POOL_DEPOSITS` (em *Variables*) | depósitos iniciais para o resumo mostrar "contra só segurar"; copie o valor pronto em Configurações → Alertas no Telegram, no painel |
 | `CHAINS` (em *Variables*) | redes a verificar, ex.: `arbitrum,base,bnb,zksync,solana` (padrão: todas) |
 | `EDGE_PCT` (em *Variables*) | quanto da faixa conta como “perto da borda” (padrão 12) |
 | `HF_MIN` (em *Variables*) | fator de saúde mínimo do Aave (padrão 1.5) |

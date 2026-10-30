@@ -32,6 +32,7 @@ App.views = App.views || {};
 
     function ensureState() {
         if (!Array.isArray(S.pools)) S.pools = [];
+        if (!S.poolDeposits || typeof S.poolDeposits !== 'object') S.poolDeposits = {};
         if (!S.poolWatch || typeof S.poolWatch !== 'object') S.poolWatch = {};
         if (!S.poolForm) S.poolForm = defaults();
     }
@@ -124,9 +125,28 @@ App.views = App.views || {};
         return calc;
     }
 
+    // Faixa informada pelo usuário (ex.: a de uma pool que ele já montou no app).
+    function customRange() {
+        const lo = App.parseNum(S.poolForm.lo);
+        const hi = App.parseNum(S.poolForm.hi);
+        if (!(lo > 0) || !(hi > lo) || !calc?.price) return null;
+        const P = calc.price;
+        const sd = calc.vol ? calc.vol * Math.sqrt(Number(S.poolForm.days)) : null;
+        const probEnd = sd ? PM().normCdf(Math.log(hi / P) / sd) - PM().normCdf(Math.log(lo / P) / sd) : null;
+        const pos = PM().positionInRange(P, lo, hi);
+        const hint = pos < 0 ? 'O preço já está abaixo da sua faixa: a posição está 100% no token e não rende taxas.'
+            : pos > 1 ? 'O preço já está acima da sua faixa: a posição está 100% na stablecoin e não rende taxas.'
+                : pos < 0.15 ? 'O preço está encostado na borda de baixo: a posição está quase toda no token.'
+                    : pos > 0.85 ? 'O preço está encostado na borda de cima: a posição está quase toda na stablecoin.'
+                        : 'O preço está dentro da sua faixa.';
+        return { key: 'custom', label: 'Sua faixa', lower: lo, upper: hi, widthPct: ((hi / lo) ** 0.5 - 1) * 100, down: (lo / P - 1) * 100, up: (hi / P - 1) * 100, probEnd, probStay: null, hint };
+    }
+
     function profilesNow() {
-        if (!calc?.price || !calc.vol) return [];
-        return PM().profiles(calc.price, calc.vol, Number(S.poolForm.days));
+        if (!calc?.price) return [];
+        const base = calc.vol ? PM().profiles(calc.price, calc.vol, Number(S.poolForm.days)) : [];
+        const own = customRange();
+        return own ? [own, ...base] : base;
     }
 
     function currentRange() {
@@ -211,10 +231,10 @@ App.views = App.views || {};
                     return html`<button type="button" class="pl-card${p.key === selected ? ' is-on' : ''}" data-profile="${p.key}" aria-pressed="${p.key === selected}">
                         <span class="pl-card-title">${p.label}</span>
                         <strong class="pl-range">${px(p.lower)} – ${px(p.upper)}</strong>
-                        <span class="muted small">±${fmt.number(p.widthPct, 1)}% do preço</span>
+                        <span class="muted small">${p.key === 'custom' ? `${fmt.pct(p.down, 1)} / ${fmt.pct(p.up, 1)} do preço` : `±${fmt.number(p.widthPct, 1)}% do preço`}</span>
                         <dl>
-                            <dt>Termina na faixa</dt><dd>${fmt.number(p.probEnd * 100, 0)}%</dd>
-                            <dt>Nunca sai da faixa</dt><dd>${fmt.number(p.probStay * 100, 0)}%</dd>
+                            <dt>Termina na faixa</dt><dd>${p.probEnd === null ? '—' : `${fmt.number(p.probEnd * 100, 0)}%`}</dd>
+                            ${raw(p.probStay === null ? '' : html`<dt>Nunca sai da faixa</dt><dd>${fmt.number(p.probStay * 100, 0)}%</dd>`)}
                             <dt>Eficiência</dt><dd>${fmt.number(eff, 1)}×</dd>
                             <dt>Depositar</dt><dd>${fmt.qty(dep.qtyA)} ${f.a}<br>${fmt.qty(dep.qtyB)} ${f.b}</dd>
                             ${raw(estApr !== null ? html`<dt>APR estimado</dt><dd>${fmt.number(estApr, 0)}%</dd>` : '')}
@@ -292,9 +312,9 @@ App.views = App.views || {};
     function orient(u) {
         // Exibe sempre como "token volátil cotado no outro": se token0 for stablecoin, inverte.
         if (isStable(u.symbol0) && !isStable(u.symbol1)) {
-            return { a: u.symbol1, b: u.symbol0, lower: 1 / u.priceUpper, upper: 1 / u.priceLower, price: 1 / u.priceNow, qtyA: u.amount1 ?? undefined, qtyB: u.amount0 ?? undefined };
+            return { a: u.symbol1, b: u.symbol0, lower: 1 / u.priceUpper, upper: 1 / u.priceLower, price: 1 / u.priceNow, qtyA: u.amount1 ?? undefined, qtyB: u.amount0 ?? undefined, feeA: u.owed1 ?? 0, feeB: u.owed0 ?? 0 };
         }
-        return { a: u.symbol0, b: u.symbol1, lower: u.priceLower, upper: u.priceUpper, price: u.priceNow, qtyA: u.amount0 ?? undefined, qtyB: u.amount1 ?? undefined };
+        return { a: u.symbol0, b: u.symbol1, lower: u.priceLower, upper: u.priceUpper, price: u.priceNow, qtyA: u.amount0 ?? undefined, qtyB: u.amount1 ?? undefined, feeA: u.owed0 ?? 0, feeB: u.owed1 ?? 0 };
     }
 
     function monitored() {
@@ -304,14 +324,15 @@ App.views = App.views || {};
             r?.parts?.forEach((p) => p.uni.forEach((u) => {
                 if (!u.symbol0 || !u.priceLower) return;
                 const o = orient(u);
-                out.push({ key: `chain:${p.chain}:${u.dex}:${u.id}`, source: `${w.name} · ${App.web3.CHAINS[p.chain].name} · ${u.dex ?? ''}${u.staked ? ' (staking)' : ''}`, chain: p.chain, fee: (u.fee ?? 0) / 10000, ...o, usd: u.usd, feesUsd: feeUsd(u), onchain: true });
+                out.push({ key: `chain:${p.chain}:${u.dex}:${u.id}`, source: `${w.name} · ${App.web3.CHAINS[p.chain].name} · ${u.dex ?? ''}${u.staked ? ' (staking)' : ''}`, chain: p.chain, fee: (u.fee ?? 0) / 10000, ...o, flip: o.a !== u.symbol0, usd: u.usd, feesUsd: feeUsd(u), onchain: true, walletId: w.id, walletName: w.name, dex: u.dex, positionId: u.id, poolAddress: u.pool });
             }));
         });
         S.pools.filter((p) => p.status === 'ativa').forEach((p) => {
             const price = pairPrice(p.a, p.b);
             if (!price) return;
             const qty = p.L ? PM().valueAt(p.L, price, p.lower, p.upper) : null;
-            out.push({ key: `diario:${p.id}`, source: `Diário · ${App.web3.CHAINS[p.chain]?.name ?? p.chain}`, chain: p.chain, fee: p.fee, a: p.a, b: p.b, lower: p.lower, upper: p.upper, price, qtyA: qty?.qtyA, qtyB: qty?.qtyB, usd: qty ? qty.value * (isStable(p.b) ? 1 : App.priceOf(under(p.b)) ?? 0) : null, feesUsd: null, journalId: p.id, createdAt: p.createdAt });
+            const dep0 = p.L ? PM().valueAt(p.L, p.entryPrice, p.lower, p.upper) : null;
+            out.push({ depFromJournal: dep0 ? { qtyA: dep0.qtyA, qtyB: dep0.qtyB } : null, key: `diario:${p.id}`, source: `Diário · ${App.web3.CHAINS[p.chain]?.name ?? p.chain}`, chain: p.chain, fee: p.fee, a: p.a, b: p.b, lower: p.lower, upper: p.upper, price, qtyA: qty?.qtyA, qtyB: qty?.qtyB, usd: qty ? qty.value * (isStable(p.b) ? 1 : App.priceOf(under(p.b)) ?? 0) : null, feesUsd: null, journalId: p.id, createdAt: p.createdAt });
         });
         return out;
     }
@@ -387,9 +408,11 @@ App.views = App.views || {};
                 <div class="pl-bar-labels"><span>${px2(m.lower, m.b)}</span><span>agora ${px2(m.price, m.b)}</span><span>${px2(m.upper, m.b)}</span></div>
                 <p class="small">${m.qtyA !== undefined && m.qtyA !== null ? `${S.settings.privacy ? '•••' : fmt.qty(m.qtyA)} ${m.a} + ${S.settings.privacy ? '•••' : fmt.qty(m.qtyB)} ${m.b}` : ''}${m.usd ? ` · ${App.money(m.usd, { priv: true, digits: 2 })}` : ''}${m.feesUsd ? ` · taxas a coletar ~${fmt.money(m.feesUsd, 'USD', 2)}` : ''}</p>
                 ${raw(a.alerts.length ? html`<ul class="w3-alerts">${raw(a.alerts.map((x) => html`<li class="w3-alert w3-alert-${x.tone}">${x.text}</li>`).join(''))}</ul>` : '')}
+                ${raw(holdBlock(m))}
                 ${raw(sug && (a.out || a.alerts.length) ? html`<p class="pl-sug">Nova faixa sugerida (equilibrada, 14 dias): <strong>${px2(sug.lower, m.b)} – ${px2(sug.upper, m.b)}</strong>. ${worth}</p>` : (worth ? html`<p class="pl-sug">${worth}</p>` : ''))}
                 <div class="toolbar">
                     <button class="btn btn-small" type="button" data-pl="plan" data-a="${m.a}" data-b="${m.b}" data-chain="${m.chain}" data-fee="${m.fee}">Planejar remontagem</button>
+                    ${raw(m.onchain ? html`<a class="btn btn-small btn-ghost" href="#/pools/relatorio/${encodeURIComponent(m.key)}">Relatório</a>` : '')}
                     ${raw(m.journalId ? html`<button class="btn btn-small btn-ghost" type="button" data-pl="close" data-id="${m.journalId}">Encerrar no diário</button>` : '')}
                 </div>
             </article>`;
@@ -401,6 +424,256 @@ App.views = App.views || {};
             if (root) renderMonitor();
         }
         store.save();
+    }
+
+    // "Pool contra só segurar": valor de hoje + taxas, comparado com segurar os tokens depositados.
+    function holdBlock(m) {
+        const dep = S.poolDeposits?.[m.key] ?? (m.depFromJournal ? { ...m.depFromJournal, fromJournal: true } : null);
+        if (!dep) {
+            return m.onchain && m.qtyA !== undefined
+                ? html`<p class="pl-hold-empty"><button class="link-btn" type="button" data-dep="${m.key}">Informar o depósito inicial</button> para comparar com “só segurar”.</p>`
+                : '';
+        }
+        if (m.qtyA === undefined || m.qtyB === undefined) return '';
+        const usdB = isStable(m.b) ? 1 : App.priceOf(under(m.b)) ?? null;
+        if (!usdB) return '';
+        const feesB = (m.feeA ?? 0) * m.price + (m.feeB ?? 0) + (dep.collectedUsd ?? 0) / usdB;
+        const poolB = m.qtyA * m.price + m.qtyB;
+        const holdB = dep.qtyA * m.price + dep.qtyB;
+        const net = (poolB + feesB - holdB) * usdB;
+        const il = (poolB - holdB) * usdB;
+        const pct = holdB ? ((poolB + feesB) / holdB - 1) * 100 : 0;
+        const priv = S.settings.privacy;
+        const money = (v) => (priv ? '•••' : fmt.money(v, 'USD', 2));
+        return html`<div class="pl-hold">
+            <div class="pl-hold-head"><span class="muted small">Contra só segurar${dep.fromJournal ? ' (sem taxas no diário)' : ''}</span>${raw(dep.fromJournal ? '' : html`<button class="link-btn small" type="button" data-dep="${m.key}">editar depósito</button>`)}</div>
+            <dl>
+                <dt>Segurar valeria</dt><dd>${money(holdB * usdB)}</dd>
+                <dt>Pool agora</dt><dd>${money(poolB * usdB)}</dd>
+                <dt>Taxas ganhas</dt><dd class="delta-up">${money(feesB * usdB)}</dd>
+                <dt>Diferença de preço</dt><dd class="delta-${toneOf(il)}">${priv ? '•••' : fmt.signedMoney(il, 'USD')}</dd>
+                <dt><strong>Resultado da pool</strong></dt><dd class="delta-${toneOf(net)}"><strong>${priv ? '•••' : fmt.signedMoney(net, 'USD')}</strong> <small>${fmt.pct(pct, 2)}</small></dd>
+            </dl>
+        </div>`;
+    }
+
+    function openDeposit(key) {
+        const m = monitored().find((x) => x.key === key);
+        if (!m) return;
+        const dep = S.poolDeposits?.[key];
+        const dlg = $('#depDialog');
+        dlg.dataset.key = key;
+        $('#depTitle').textContent = `Depósito inicial · ${m.a}/${m.b}`;
+        $('#depALabel').textContent = `Quantidade de ${m.a} depositada`;
+        $('#depBLabel').textContent = `Quantidade de ${m.b} depositada`;
+        $('#depA').value = dep?.qtyA ?? '';
+        $('#depB').value = dep?.qtyB ?? '';
+        $('#depCollected').value = dep?.collectedUsd ?? '';
+        $('#depPriceLabel').textContent = `Preço de ${m.a} no depósito, em ${m.b} (opcional)`;
+        $('#depPrice').value = dep?.priceEntry ?? '';
+        $('#depHint').textContent = `Hoje a posição tem ${fmt.qty(m.qtyA)} ${m.a} + ${fmt.qty(m.qtyB)} ${m.b}. Use as quantidades do momento em que você depositou (aparecem no app na criação da posição ou na transação de depósito).`;
+        dlg.showModal();
+        $('#depA').focus();
+    }
+
+    function wireDepositDialog() {
+        const dlg = $('#depDialog');
+        if (dlg.dataset.wired) return;
+        dlg.dataset.wired = '1';
+        $('#depCancel').addEventListener('click', () => dlg.close());
+        $('#depClear').addEventListener('click', () => { delete S.poolDeposits[dlg.dataset.key]; store.commit('pools'); dlg.close(); });
+        $('#depForm').addEventListener('submit', (event) => {
+            event.preventDefault();
+            const qa = App.parseNum($('#depA').value);
+            const qb = App.parseNum($('#depB').value);
+            const col = $('#depCollected').value.trim() ? App.parseNum($('#depCollected').value) : 0;
+            const pe = $('#depPrice').value.trim() ? App.parseNum($('#depPrice').value) : null;
+            if (!(qa >= 0) || !(qb >= 0) || qa + qb <= 0) { toast('Informe as quantidades depositadas.', 'bad'); return; }
+            S.poolDeposits = { ...(S.poolDeposits ?? {}), [dlg.dataset.key]: { qtyA: qa, qtyB: qb, collectedUsd: col > 0 ? col : 0, priceEntry: pe > 0 ? pe : null, at: Date.now() } };
+            store.commit('pools');
+            dlg.close();
+            toast('Depósito salvo. A comparação aparece no cartão da pool.', 'up');
+        });
+    }
+
+    const short = (v) => `${v.slice(0, 6)}…${v.slice(-4)}`;
+    const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    // ---------- Relatório automático de uma posição ----------
+    const GT_NET = { ethereum: 'eth', arbitrum: 'arbitrum', base: 'base', optimism: 'optimism', polygon: 'polygon_pos', bnb: 'bsc', zksync: 'zksync', solana: 'solana' };
+    const poolStatsCache = new Map();
+    async function poolStats(chain, address, feePct) {
+        if (!address || !GT_NET[chain]) return null;
+        const key = `${chain}:${address}`;
+        const hit = poolStatsCache.get(key);
+        if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.value;
+        const r = await fetch(`https://api.geckoterminal.com/api/v2/networks/${GT_NET[chain]}/pools/${address}`, { headers: { accept: 'application/json' } });
+        if (!r.ok) throw new Error(`GeckoTerminal HTTP ${r.status}`);
+        const a = (await r.json()).data?.attributes ?? {};
+        const tvl = Number(a.reserve_in_usd) || 0;
+        const vol = Number(a.volume_usd?.h24) || 0;
+        const value = tvl > 0 ? { tvl, vol, fees: vol * feePct / 100, apr: (vol * feePct / 100 / tvl) * 365 * 100, at: Date.now() } : null;
+        poolStatsCache.set(key, { at: Date.now(), value });
+        return value;
+    }
+
+    // Converte um ponto do histórico (token1 por token0) para a orientação exibida (B por A).
+    function histPoint(m, h) {
+        const price = m.flip ? 1 / h.price0 : h.price0;
+        const qtyA = m.flip ? h.amount1 : h.amount0;
+        const qtyB = m.flip ? h.amount0 : h.amount1;
+        const feeA = m.flip ? h.owed1 : h.owed0;
+        const feeB = m.flip ? h.owed0 : h.owed1;
+        return { t: h.t, price, valueB: qtyA * price + qtyB, feesB: (feeA ?? 0) * price + (feeB ?? 0) };
+    }
+
+    let reportKey = null;
+    let reportTimer = null;
+    let reportChart = null;
+
+    function renderReport() {
+        const el = $('#rpBody', root);
+        if (!el) return;
+        const list = monitored().filter((x) => x.onchain);
+        const m = list.find((x) => x.key === reportKey) ?? (reportKey ? null : list[0]);
+        if (!m) {
+            el.innerHTML = S.wallets.length
+                ? '<p class="muted">Lendo as carteiras… Se a posição não aparecer, confira em Minhas pools.</p>'
+                : '<div class="empty-state"><p>O relatório automático usa as posições das suas carteiras. Cadastre a carteira em Configurações.</p><a class="btn btn-small btn-primary" href="#/config">Cadastrar carteira</a></div>';
+            return;
+        }
+        reportKey = m.key;
+        const usdB = isStable(m.b) ? 1 : App.priceOf(under(m.b)) ?? null;
+        const toUsd = (vB) => (usdB ? vB * usdB : null);
+        const dep = S.poolDeposits?.[m.key];
+        const valueB = m.qtyA * m.price + m.qtyB;
+        const feesB = (m.feeA ?? 0) * m.price + (m.feeB ?? 0) + (dep?.collectedUsd && usdB ? dep.collectedUsd / usdB : 0);
+        const holdB = dep ? dep.qtyA * m.price + dep.qtyB : null;
+        const depB = dep?.priceEntry ? dep.qtyA * dep.priceEntry + dep.qtyB : null;
+        const pos = PM().positionInRange(m.price, m.lower, m.upper);
+        const status = pos < 0 ? 'fora-baixo' : pos > 1 ? 'fora-cima' : pos < 0.2 ? 'borda-baixo' : pos > 0.8 ? 'borda-cima' : 'centro';
+        const take = {
+            centro: ['up', 'Dentro da faixa, com o preço no centro.', 'Nada a fazer: deixe a posição trabalhar.'],
+            'borda-baixo': ['warn', 'Perto da borda de baixo.', 'Está quase toda em ' + m.a + '. Se ficar aqui por mais de 3 dias, considere remontar.'],
+            'borda-cima': ['warn', 'Perto da borda de cima.', 'Está quase toda em ' + m.b + '. Se ficar aqui por mais de 3 dias, considere remontar.'],
+            'fora-baixo': ['down', 'Fora da faixa, por baixo.', 'Está 100% em ' + m.a + ' e não rende taxas. Se continuar fora por mais de um dia, avalie remontar.'],
+            'fora-cima': ['down', 'Fora da faixa, por cima.', 'Está 100% em ' + m.b + ' e não rende taxas. Se continuar fora por mais de um dia, avalie remontar.'],
+        }[status];
+        // Ritmo das taxas pelo histórico automático.
+        const hist = (S.poolHistory?.[m.key] ?? []).map((h) => histPoint(m, h)).filter((h) => Number.isFinite(h.valueB));
+        const first = hist[0];
+        const last = hist[hist.length - 1];
+        const hours = first && last ? (last.t - first.t) / 3600000 : 0;
+        const ratePerDayB = hours >= 1 ? Math.max(0, last.feesB - first.feesB) / hours * 24 : null;
+        const aprReal = ratePerDayB !== null && valueB ? ratePerDayB * 365 / valueB * 100 : null;
+        const priv = S.settings.privacy;
+        const usd = (vB) => (priv ? '•••' : vB === null || !usdB ? '—' : fmt.money(toUsd(vB), 'USD', 2));
+        const sUsd = (vB) => (priv ? '•••' : vB === null || !usdB ? '—' : fmt.signedMoney(toUsd(vB), 'USD'));
+        const res = holdB !== null ? valueB + feesB - holdB : null;
+        const vsUsd = depB !== null ? valueB + feesB - depB : null;
+
+        el.innerHTML = html`
+            <section class="panel rp-head">
+                <div class="rp-title">
+                    <h2>${m.a}/${m.b} · ${App.web3.CHAINS[m.chain]?.name} · ${m.dex ?? ''} ${raw(m.fee ? html`<span class="muted">${fmt.number(m.fee, 2)}%</span>` : '')}</h2>
+                    <p class="muted small">${m.walletName} · posição ${String(m.positionId).length > 12 ? short(String(m.positionId)) : `#${m.positionId}`} · ${last ? `atualizado às ${fmt.time(new Date(last.t))}` : 'lendo…'} · atualiza sozinho a cada 5 minutos</p>
+                </div>
+                <p class="rp-take"><strong class="delta-${take[0]}">${take[1]}</strong> ${take[2]}</p>
+            </section>
+            <div class="rp-kpis">
+                <div class="panel"><span class="pf-label">Valor da posição</span><strong class="rp-big">${usd(valueB)}</strong><span class="muted small">${fmt.qty(m.qtyA)} ${m.a} + ${fmt.qty(m.qtyB)} ${m.b}</span></div>
+                <div class="panel"><span class="pf-label">Taxas ganhas</span><strong class="rp-big">${usd(feesB)}</strong><span class="muted small">${ratePerDayB !== null ? `≈ ${usd(ratePerDayB)} por dia` : 'ritmo aparece após 1 h de histórico'}</span></div>
+                <div class="panel"><span class="pf-label">Contra só segurar</span><strong class="rp-big delta-${toneOf(res)}">${res === null ? '—' : sUsd(res)}</strong><span class="muted small">${res === null ? html`<button class="link-btn" type="button" data-dep="${m.key}">informe o depósito inicial</button>` : `${fmt.pct((valueB + feesB) / holdB * 100 - 100, 2)} contra segurar`}</span></div>
+                <div class="panel"><span class="pf-label">Contra ter ficado em dólar</span><strong class="rp-big delta-${toneOf(vsUsd)}">${vsUsd === null ? '—' : sUsd(vsUsd)}</strong><span class="muted small">${vsUsd === null ? 'informe o preço de entrada no depósito' : `${fmt.pct((valueB + feesB) / depB * 100 - 100, 2)} sobre o depositado`}</span></div>
+            </div>
+            <section class="panel">
+                <h3 class="panel-title">Onde o preço está na faixa</h3>
+                <div class="rp-range">${raw(rangeSvg(m, status))}</div>
+                <dl class="rp-dl">
+                    <dt>Posição na faixa (0% = borda de baixo)</dt><dd>${fmt.number(Math.max(-99, Math.min(199, pos * 100)), 0)}%</dd>
+                    <dt>Até a borda de baixo</dt><dd>${fmt.pct((m.lower / m.price - 1) * 100, 2)}</dd>
+                    <dt>Até a borda de cima</dt><dd>${fmt.pct((m.upper / m.price - 1) * 100, 2)}</dd>
+                </dl>
+            </section>
+            <div class="rp-grid">
+                <section class="panel">
+                    <div class="panel-bar"><h3 class="panel-title">Contra só segurar</h3>${raw(dep ? html`<button class="link-btn small" type="button" data-dep="${m.key}">editar depósito</button>` : '')}</div>
+                    ${raw(dep ? html`<dl class="rp-dl">
+                        <dt>Segurar ${fmt.qty(dep.qtyA)} ${m.a} + ${fmt.qty(dep.qtyB)} ${m.b} valeria</dt><dd>${usd(holdB)}</dd>
+                        <dt>Pool agora</dt><dd>${usd(valueB)}</dd>
+                        <dt>Diferença de preço (sem taxas)</dt><dd class="delta-${toneOf(valueB - holdB)}">${sUsd(valueB - holdB)}</dd>
+                        <dt>Taxas ganhas</dt><dd class="delta-up">${usd(feesB)}</dd>
+                        <dt class="rp-total">Resultado da pool</dt><dd class="rp-total delta-${toneOf(res)}">${sUsd(res)}</dd>
+                    </dl>` : html`<p class="muted">Informe quanto você depositou para ver se a pool está ganhando de só segurar.</p><button class="btn btn-small btn-primary" type="button" data-dep="${m.key}">Informar depósito inicial</button>`)}
+                </section>
+                <section class="panel">
+                    <h3 class="panel-title">Taxas e expectativa</h3>
+                    <div id="rpExp"><p class="muted">Buscando o APR da pool…</p></div>
+                </section>
+            </div>
+            <section class="panel">
+                <h3 class="panel-title">Evolução</h3>
+                <p class="muted small">${dep ? 'Pool + taxas contra só segurar, a cada leitura da carteira.' : 'Valor da posição + taxas, a cada leitura da carteira.'}</p>
+                <div id="rpChart" class="rp-chart"></div>
+                <p class="footnote">${hist.length} leitura(s) guardadas neste navegador, desde ${first ? fmt.date(new Date(first.t).toISOString().slice(0, 10)) : '—'}. O painel guarda um ponto a cada 10 minutos enquanto estiver aberto.</p>
+            </section>`;
+        renderReportChart(m, hist, dep, usdB);
+        renderExpectation(m, valueB, ratePerDayB, aprReal, usd);
+    }
+
+    function rangeSvg(m, status) {
+        const W = 640, H = 80, pad = 14;
+        const lo = Math.min(m.lower, m.price) * 0.97, hi = Math.max(m.upper, m.price) * 1.03;
+        const x = (v) => pad + (Math.log(v) - Math.log(lo)) / (Math.log(hi) - Math.log(lo)) * (W - 2 * pad);
+        const col = status === 'centro' ? 'var(--up)' : status.startsWith('borda') ? 'var(--warn)' : 'var(--down)';
+        const label = (v) => esc(px2(v, m.b));
+        return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Preço dentro da faixa">
+            <rect x="${pad}" y="32" width="${W - 2 * pad}" height="12" rx="6" fill="var(--surface-3)"/>
+            <rect x="${x(m.lower)}" y="32" width="${x(m.upper) - x(m.lower)}" height="12" rx="6" fill="${col}" opacity="0.35"/>
+            <line x1="${x(m.lower)}" x2="${x(m.lower)}" y1="26" y2="50" stroke="var(--ink-3)"/><line x1="${x(m.upper)}" x2="${x(m.upper)}" y1="26" y2="50" stroke="var(--ink-3)"/>
+            <text x="${x(m.lower)}" y="68" text-anchor="middle" font-size="12" fill="var(--ink-3)">${label(m.lower)}</text>
+            <text x="${x(m.upper)}" y="68" text-anchor="middle" font-size="12" fill="var(--ink-3)">${label(m.upper)}</text>
+            <line x1="${x(m.price)}" x2="${x(m.price)}" y1="20" y2="56" stroke="var(--ink)" stroke-width="3" stroke-linecap="round"/>
+            <text x="${x(m.price)}" y="14" text-anchor="middle" font-size="12" font-weight="700" fill="var(--ink)">agora ${label(m.price)}</text>
+        </svg>`;
+    }
+
+    function renderReportChart(m, hist, dep, usdB) {
+        const box = $('#rpChart', root);
+        if (!box) return;
+        reportChart?.remove();
+        reportChart = null;
+        if (hist.length < 2 || !usdB) { box.innerHTML = '<p class="muted">O gráfico aparece a partir da segunda leitura (cerca de 10 minutos com o painel aberto).</p>'; return; }
+        reportChart = window.LightweightCharts.createChart(box, App.charts.chartOptions({ handleScroll: false, handleScale: false, timeScale: { borderColor: App.charts.css('--line'), timeVisible: true, secondsVisible: false } }));
+        const toPts = (fn) => hist.map((h) => ({ time: Math.floor(h.t / 1000), value: fn(h) * usdB }));
+        const pool = reportChart.addLineSeries({ color: App.charts.css('--brand'), lineWidth: 2, priceLineVisible: false, title: 'Pool + taxas' });
+        pool.setData(toPts((h) => h.valueB + h.feesB));
+        if (dep) {
+            const hold = reportChart.addLineSeries({ color: App.charts.css('--ink-3'), lineWidth: 2, lineStyle: 2, priceLineVisible: false, title: 'Só segurar' });
+            hold.setData(toPts((h) => dep.qtyA * h.price + dep.qtyB));
+        }
+        reportChart.timeScale().fitContent();
+    }
+
+    async function renderExpectation(m, valueB, ratePerDayB, aprReal, usd) {
+        const el = $('#rpExp', root);
+        if (!el) return;
+        let st = null;
+        try { st = await poolStats(m.chain, m.poolAddress, m.fee); } catch { st = null; }
+        if (!root || !$('#rpExp', root)) return;
+        const rows = [];
+        if (st?.apr) {
+            rows.push(['APR da pool hoje, sempre dentro', st.apr]);
+            rows.push(['APR da pool, dentro 70% do tempo', st.apr * 0.7]);
+            rows.push(['Volume normal (metade), dentro 70% do tempo', st.apr * 0.35]);
+        }
+        if (aprReal !== null) rows.push(['Seu ritmo real (histórico)', aprReal]);
+        el.innerHTML = html`
+            ${raw(st ? html`<p class="muted small">Pool inteira: ${fmt.compactMoney(st.fees)} em taxas em 24 h sobre ${fmt.compactMoney(st.tvl)} de liquidez (volume de ${fmt.compactMoney(st.vol)}), APR de ${fmt.number(st.apr ?? 0, 1)}%. Fonte: GeckoTerminal.</p>` : '<p class="muted small">APR da pool indisponível agora (GeckoTerminal).</p>')}
+            ${raw(rows.length ? html`<div class="table-wrap"><table class="data-table"><thead><tr><th>Cenário</th><th class="col-num">APR</th><th class="col-num">Por dia</th><th class="col-num">Por mês</th><th class="col-num">% ao mês</th></tr></thead><tbody>
+                ${raw(rows.map(([name, apr]) => html`<tr><td>${name}</td><td class="col-num">${fmt.number(apr, 0)}%</td><td class="col-num">${usd(valueB * apr / 100 / 365)}</td><td class="col-num"><strong>${usd(valueB * apr / 100 / 12)}</strong></td><td class="col-num">${fmt.number(apr / 12, 1)}%</td></tr>`).join(''))}
+            </tbody></table></div>` : '')}
+            ${raw(st?.apr && aprReal !== null ? html`<p class="footnote">Seu ritmo real está em ${fmt.number(aprReal / st.apr * 100, 0)}% do APR da pool.</p>` : '')}`;
     }
 
     function px2(v, b) {
@@ -493,7 +766,7 @@ App.views = App.views || {};
                 <label>Rede<select class="input" data-f="chain">${raw(Object.entries(App.web3.CHAINS).map(([k, c]) => html`<option value="${k}" ${f.chain === k ? 'selected' : ''}>${c.name}</option>`).join(''))}</select></label>
                 <label>Taxa da pool<select class="input" data-f="fee">${raw([0.01, ...FEES].map((x) => html`<option value="${x}" ${Number(f.fee) === x ? 'selected' : ''}>${fmt.number(x, 2)}%</option>`).join(''))}</select></label>
                 ${raw(f.mode === 'two'
-                    ? html`<label>APR da pool no app (opcional, %)<input class="input" data-f="apr" inputmode="decimal" value="${f.apr}" placeholder="ex.: 18"></label>`
+                    ? html`<label>APR da pool no app (opcional, %)<input class="input" data-f="apr" inputmode="decimal" value="${f.apr}" placeholder="ex.: 18"></label><label>Sua faixa: mínimo (opcional)<input class="input" data-f="lo" inputmode="decimal" value="${f.lo ?? ''}" placeholder="ex.: 2248,5"></label><label>Sua faixa: máximo<input class="input" data-f="hi" inputmode="decimal" value="${f.hi ?? ''}" placeholder="ex.: 2489,93"></label>`
                     : html`<label>Começar a ${f.mode === 'buy' ? 'comprar' : 'vender'} a (%)<input class="input" data-f="near" inputmode="decimal" value="${f.near}"></label><label>Até (%)<input class="input" data-f="far" inputmode="decimal" value="${f.far}"></label>`)}
                 <label>Volatilidade diária (opcional, %)<input class="input" data-f="vol" inputmode="decimal" value="${f.vol}" placeholder="automática"></label>
             </div>`;
@@ -516,7 +789,8 @@ App.views = App.views || {};
             renderForm();
         }
         if (key === 'capital' || key === 'b') renderGas();
-        if (event.type === 'change' || ['capital', 'apr', 'vol', 'near', 'far'].includes(key)) recompute();
+        if (['lo', 'hi'].includes(key) && customRange()) selected = 'custom';
+        if (event.type === 'change' || ['capital', 'apr', 'vol', 'near', 'far', 'lo', 'hi'].includes(key)) recompute();
     }
 
     function onClick(event) {
@@ -534,6 +808,8 @@ App.views = App.views || {};
         const act = t.closest('[data-pl]')?.dataset.pl;
         const btn = t.closest('[data-pl]');
         if (act === 'save') saveToJournal();
+        const depKey = t.closest('[data-dep]')?.dataset.dep;
+        if (depKey) { wireDepositDialog(); openDeposit(depKey); return; }
         if (act === 'gas') renderGas(true);
         if (act === 'read') { S.wallets.forEach((w) => App.refreshWallet(w.id)); toast('Lendo carteiras…'); }
         if (act === 'pick-a' || act === 'pick-b') {
@@ -575,11 +851,11 @@ App.views = App.views || {};
         title: 'Pools',
         mount(el, params = []) {
             ensureState();
-            const sub = params[0] === 'planejar' ? 'planejar' : (params[0] === 'explorar' || params[0] === 'descobrir') ? 'explorar' : 'minhas';
+            const sub = params[0] === 'planejar' ? 'planejar' : params[0] === 'relatorio' ? 'relatorio' : (params[0] === 'explorar' || params[0] === 'descobrir') ? 'explorar' : 'minhas';
             const tabs = html`<nav class="subtabs" aria-label="Seções de pools">
-                ${raw([['minhas', 'Minhas pools', '#/pools'], ['planejar', 'Planejar', '#/pools/planejar'], ['explorar', 'Explorar', '#/pools/explorar']].map(([k, label, href]) => html`<a href="${href}" class="${sub === k ? 'is-active' : ''}" ${raw(sub === k ? 'aria-current="page"' : '')}>${label}</a>`).join(''))}
+                ${raw([['minhas', 'Minhas pools', '#/pools'], ['relatorio', 'Relatório', '#/pools/relatorio'], ['planejar', 'Planejar', '#/pools/planejar'], ['explorar', 'Explorar', '#/pools/explorar']].map(([k, label, href]) => html`<a href="${href}" class="${sub === k ? 'is-active' : ''}" ${raw(sub === k ? 'aria-current="page"' : '')}>${label}</a>`).join(''))}
             </nav>`;
-            const lede = { minhas: 'Suas posições de liquidez, o que precisa de atenção e o diário de montagens.', planejar: 'Escolha o par e o capital: o painel sugere faixas pela volatilidade real e mostra o custo em cada rede.', explorar: 'Onde está o volume, as taxas e o rendimento, por rede e por app.' }[sub];
+            const lede = { relatorio: 'O relatório da posição, montado sozinho a partir da carteira: situação, resultado, taxas e expectativa.', minhas: 'Suas posições de liquidez, o que precisa de atenção e o diário de montagens.', planejar: 'Escolha o par e o capital: o painel sugere faixas pela volatilidade real e mostra o custo em cada rede.', explorar: 'Onde está o volume, as taxas e o rendimento, por rede e por app.' }[sub];
             const head = html`<header class="page-head"><div><h1>Pools</h1><p class="lede">${lede}</p></div></header>${raw(tabs)}`;
             if (sub === 'explorar') {
                 discovering = true;
@@ -589,6 +865,22 @@ App.views = App.views || {};
             }
             discovering = false;
             root = el;
+            if (sub === 'relatorio') {
+                reportKey = params[1] || null;
+                el.innerHTML = head + html`${raw(monitored().filter((x) => x.onchain).length > 1 ? html`<div class="toolbar"><label class="sr-only" for="rpPick">Posição</label><select id="rpPick" class="input input-small">${raw(monitored().filter((x) => x.onchain).map((x) => html`<option value="${x.key}" ${x.key === reportKey ? 'selected' : ''}>${x.a}/${x.b} · ${x.source}</option>`).join(''))}</select></div>` : '')}<div id="rpBody" class="rp"></div>`;
+                el.addEventListener('click', onClick);
+                $('#rpPick', el)?.addEventListener('change', (e) => App.go(`#/pools/relatorio/${encodeURIComponent(e.target.value)}`));
+                renderReport();
+                const readAll = () => S.wallets.forEach((w) => App.refreshWallet(w.id));
+                if (S.wallets.some((w) => !App.walletResults?.get(w.id))) readAll();
+                reportTimer = setInterval(readAll, 5 * 60 * 1000);
+                offs = [
+                    bus.on('wallet-read', renderReport),
+                    bus.on('pools', renderReport),
+                    bus.on('settings', renderReport),
+                ];
+                return;
+            }
             App.extraSymbols = [...new Set([under(S.poolForm.a), under(S.poolForm.b), 'ETH', 'POL', 'BNB', 'SOL'].filter((s) => s !== 'USD'))];
             App.refreshPrices();
             el.innerHTML = head + (sub === 'planejar' ? html`
@@ -638,6 +930,10 @@ App.views = App.views || {};
         },
         unmount() {
             if (discovering) { App.poolDiscover.unmount(); discovering = false; return; }
+            clearInterval(reportTimer);
+            reportTimer = null;
+            reportChart?.remove();
+            reportChart = null;
             offs.forEach((o) => o());
             offs = [];
             App.extraSymbols = [];

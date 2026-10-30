@@ -52,6 +52,8 @@ window.App = window.App || {};
         web3Settings: { rpc: {}, blockscoutKey: '', customTokens: [], showSmall: false },
         pools: [],
         poolWatch: {},
+        poolDeposits: {},
+        poolHistory: {},
         poolForm: null,
     });
 

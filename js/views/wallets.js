@@ -27,6 +27,7 @@ App.views = App.views || {};
         try {
             const res = await W3().readWallet(wallet);
             notifyRangeChanges(wallet, results.get(walletId), res);
+            recordPoolHistory(res);
             const prev = (S.walletSnapshots[walletId] ?? []).slice(-1)[0];
             res.prev = prev ?? null;
             results.set(walletId, res);
@@ -41,6 +42,24 @@ App.views = App.views || {};
         render();
     }
     App.refreshWallet = refresh;
+
+    // Guarda um ponto por posição de pool a cada leitura (no máximo um a cada 10 min, até 600),
+    // para o relatório da pool montar o histórico sozinho.
+    function recordPoolHistory(res) {
+        if (!S.poolHistory || typeof S.poolHistory !== 'object') S.poolHistory = {};
+        const now = Date.now();
+        res.parts?.forEach((p) => p.uni?.forEach((u) => {
+            if (!u.symbol0 || !u.priceNow || u.amount0 === null) return;
+            const key = `chain:${p.chain}:${u.dex}:${u.id}`;
+            const list = S.poolHistory[key] || (S.poolHistory[key] = []);
+            const point = { t: now, price0: u.priceNow, amount0: u.amount0, amount1: u.amount1, owed0: u.owed0, owed1: u.owed1, usd: u.usd ?? null };
+            const last = list[list.length - 1];
+            if (last && now - last.t < 10 * 60 * 1000) list[list.length - 1] = point;
+            else list.push(point);
+            if (list.length > 600) list.splice(0, list.length - 600);
+        }));
+        store.save();
+    }
 
     // Avisa (aviso na tela e notificação do navegador) quando uma pool sai da faixa entre duas leituras.
     function notifyRangeChanges(wallet, before, after) {

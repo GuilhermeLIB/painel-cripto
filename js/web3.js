@@ -168,7 +168,9 @@ window.App = window.App || {};
             ]),
             factory: new E.Interface(['function getPool(address tokenA, address tokenB, uint24 fee) view returns (address)']),
             // Só os dois primeiros campos de slot0: o restante muda entre Uniswap, PancakeSwap e Aerodrome.
-            pool: new E.Interface(['function slot0() view returns (uint160 sqrtPriceX96, int24 tick)', 'function fee() view returns (uint24)']),
+            pool: new E.Interface(['function slot0() view returns (uint160 sqrtPriceX96, int24 tick)', 'function fee() view returns (uint24)', 'function feeGrowthGlobal0X128() view returns (uint256)', 'function feeGrowthGlobal1X128() view returns (uint256)']),
+            // Uniswap v3 e PancakeSwap v3: os quatro primeiros campos de ticks() são iguais.
+            ticks: new E.Interface(['function ticks(int24 tick) view returns (uint128 liquidityGross, int128 liquidityNet, uint256 feeGrowthOutside0X128, uint256 feeGrowthOutside1X128)']),
             npmSlip: new E.Interface(['function positions(uint256 tokenId) view returns (uint96 nonce, address operator, address token0, address token1, int24 tickSpacing, int24 tickLower, int24 tickUpper, uint128 liquidity, uint256 feeGrowthInside0LastX128, uint256 feeGrowthInside1LastX128, uint128 tokensOwed0, uint128 tokensOwed1)']),
             factorySlip: new E.Interface(['function getPool(address tokenA, address tokenB, int24 tickSpacing) view returns (address)']),
             nft: new E.Interface(['function ownerOf(uint256 tokenId) view returns (address)']),
@@ -399,7 +401,7 @@ window.App = window.App || {};
         const positions = posRaw.map((r, i) => {
             if (!r) return null;
             const p = posAbi.decodeFunctionResult('positions', r);
-            return { id: all[i].id.toString(), staked: all[i].staked, token0: p[2], token1: p[3], feeOrSpacing: Number(p[4]), tickLower: Number(p[5]), tickUpper: Number(p[6]), liquidity: p[7], owed0: p[10], owed1: p[11] };
+            return { id: all[i].id.toString(), staked: all[i].staked, token0: p[2], token1: p[3], feeOrSpacing: Number(p[4]), tickLower: Number(p[5]), tickUpper: Number(p[6]), liquidity: p[7], inside0Last: p[8], inside1Last: p[9], owed0: p[10], owed1: p[11] };
         }).filter(Boolean);
         const active = positions.filter((p) => p.liquidity > 0n);
         const closed = positions.length - active.length;
@@ -408,6 +410,8 @@ window.App = window.App || {};
         const poolRaw = await multicall(chainKey, active.map((p) => ({ target: dex.factory, data: factoryAbi.encodeFunctionData('getPool', [p.token0, p.token1, p.feeOrSpacing]) })));
         const pools = poolRaw.map((r) => (r ? factoryAbi.decodeFunctionResult('getPool', r)[0] : null));
         const slotRaw = await multicall(chainKey, pools.map((pool) => ({ target: pool ?? (CHAINS[chainKey].multicall ?? MULTICALL3), data: I.pool.encodeFunctionData('slot0', []) })));
+        // Taxas acumuladas de verdade (não só as "registradas"): fórmula do feeGrowthInside da Uniswap v3.
+        const unclaimed = slip ? [] : await feesAccrued(chainKey, pools, active, slotRaw).catch(() => []);
         const feeRaw = slip ? await multicall(chainKey, pools.map((pool) => ({ target: pool ?? (CHAINS[chainKey].multicall ?? MULTICALL3), data: I.pool.encodeFunctionData('fee', []) }))) : [];
         const infos = await tokenInfo(chainKey, [...new Set(active.flatMap((p) => [p.token0, p.token1]))]);
         const result = active.map((p, i) => {
@@ -421,17 +425,51 @@ window.App = window.App || {};
             const tickPrice = (t) => 1.0001 ** t * scale;
             const fee = slip ? (feeRaw[i] ? Number(I.pool.decodeFunctionResult('fee', feeRaw[i])[0]) : null) : p.feeOrSpacing;
             return {
-                id: p.id, dex: dex.name, staked: p.staked, fee, token0: p.token0, token1: p.token1,
+                id: p.id, dex: dex.name, staked: p.staked, fee, token0: p.token0, token1: p.token1, pool: pools[i],
                 symbol0: i0.symbol, symbol1: i1.symbol,
                 tickLower: p.tickLower, tickUpper: p.tickUpper, tick: Number(tick),
                 priceLower: tickPrice(p.tickLower), priceUpper: tickPrice(p.tickUpper), priceNow: (Number(sqrtPriceX96) / 2 ** 96) ** 2 * scale,
                 amount0: a0 / 10 ** i0.decimals, amount1: a1 / 10 ** i1.decimals,
-                owed0: Number(p.owed0) / 10 ** i0.decimals, owed1: Number(p.owed1) / 10 ** i1.decimals,
+                owed0: Number(unclaimed[i]?.[0] ?? p.owed0) / 10 ** i0.decimals, owed1: Number(unclaimed[i]?.[1] ?? p.owed1) / 10 ** i1.decimals,
                 inRange: Number(tick) >= p.tickLower && Number(tick) < p.tickUpper,
             };
         });
         const clean = result.filter(Boolean);
         return closed ? [...clean, { closedCount: closed, dex: dex.name }] : clean;
+    }
+
+    const MOD = 2n ** 256n;
+    const sub = (a, b) => ((a - b) % MOD + MOD) % MOD;
+
+    async function feesAccrued(chainKey, pools, positions, slotRaw) {
+        const E = await loadEthers();
+        const I = ifaces(E);
+        const target = (pool) => pool ?? (CHAINS[chainKey].multicall ?? MULTICALL3);
+        const calls = positions.flatMap((p, i) => [
+            { target: target(pools[i]), data: I.pool.encodeFunctionData('feeGrowthGlobal0X128', []) },
+            { target: target(pools[i]), data: I.pool.encodeFunctionData('feeGrowthGlobal1X128', []) },
+            { target: target(pools[i]), data: I.ticks.encodeFunctionData('ticks', [p.tickLower]) },
+            { target: target(pools[i]), data: I.ticks.encodeFunctionData('ticks', [p.tickUpper]) },
+        ]);
+        const res = await multicall(chainKey, calls);
+        return positions.map((p, i) => {
+            const [g0r, g1r, loR, upR] = res.slice(i * 4, i * 4 + 4);
+            if (!g0r || !g1r || !loR || !upR || !slotRaw[i]) return null;
+            const g0 = I.pool.decodeFunctionResult('feeGrowthGlobal0X128', g0r)[0];
+            const g1 = I.pool.decodeFunctionResult('feeGrowthGlobal1X128', g1r)[0];
+            const lo = I.ticks.decodeFunctionResult('ticks', loR);
+            const up = I.ticks.decodeFunctionResult('ticks', upR);
+            const tick = Number(I.pool.decodeFunctionResult('slot0', slotRaw[i])[1]);
+            const inside = (g, outLo, outUp) => {
+                const below = tick >= p.tickLower ? outLo : sub(g, outLo);
+                const above = tick < p.tickUpper ? outUp : sub(g, outUp);
+                return sub(sub(g, below), above);
+            };
+            const in0 = inside(g0, lo[2], up[2]);
+            const in1 = inside(g1, lo[3], up[3]);
+            const q = 2n ** 128n;
+            return [p.owed0 + (p.liquidity * sub(in0, p.inside0Last)) / q, p.owed1 + (p.liquidity * sub(in1, p.inside1Last)) / q];
+        });
     }
 
     async function concentrated(chainKey, owner, errors) {
