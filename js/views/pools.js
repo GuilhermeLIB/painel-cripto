@@ -408,6 +408,7 @@ App.views = App.views || {};
                 <div class="pl-bar-labels"><span>${px2(m.lower, m.b)}</span><span>agora ${px2(m.price, m.b)}</span><span>${px2(m.upper, m.b)}</span></div>
                 <p class="small">${m.qtyA !== undefined && m.qtyA !== null ? `${S.settings.privacy ? '•••' : fmt.qty(m.qtyA)} ${m.a} + ${S.settings.privacy ? '•••' : fmt.qty(m.qtyB)} ${m.b}` : ''}${m.usd ? ` · ${App.money(m.usd, { priv: true, digits: 2 })}` : ''}${m.feesUsd ? ` · taxas a coletar ~${fmt.money(m.feesUsd, 'USD', 2)}` : ''}</p>
                 ${raw(a.alerts.length ? html`<ul class="w3-alerts">${raw(a.alerts.map((x) => html`<li class="w3-alert w3-alert-${x.tone}">${x.text}</li>`).join(''))}</ul>` : '')}
+                ${raw(m.onchain ? methodBadge(m) : '')}
                 ${raw(holdBlock(m))}
                 ${raw(sug && (a.out || a.alerts.length) ? html`<p class="pl-sug">Nova faixa sugerida (equilibrada, 14 dias): <strong>${px2(sug.lower, m.b)} – ${px2(sug.upper, m.b)}</strong>. ${worth}</p>` : (worth ? html`<p class="pl-sug">${worth}</p>` : ''))}
                 <div class="toolbar">
@@ -471,6 +472,8 @@ App.views = App.views || {};
         $('#depCollected').value = dep?.collectedUsd ?? '';
         $('#depPriceLabel').textContent = `Preço de ${m.a} no depósito, em ${m.b} (opcional)`;
         $('#depPrice').value = dep?.priceEntry ?? '';
+        $('#depStart').value = dep?.start ?? '';
+        $('#depStart').max = new Date().toISOString().slice(0, 10);
         $('#depHint').textContent = `Hoje a posição tem ${fmt.qty(m.qtyA)} ${m.a} + ${fmt.qty(m.qtyB)} ${m.b}. Use as quantidades do momento em que você depositou (aparecem no app na criação da posição ou na transação de depósito).`;
         dlg.showModal();
         $('#depA').focus();
@@ -489,7 +492,7 @@ App.views = App.views || {};
             const col = $('#depCollected').value.trim() ? App.parseNum($('#depCollected').value) : 0;
             const pe = $('#depPrice').value.trim() ? App.parseNum($('#depPrice').value) : null;
             if (!(qa >= 0) || !(qb >= 0) || qa + qb <= 0) { toast('Informe as quantidades depositadas.', 'bad'); return; }
-            S.poolDeposits = { ...(S.poolDeposits ?? {}), [dlg.dataset.key]: { qtyA: qa, qtyB: qb, collectedUsd: col > 0 ? col : 0, priceEntry: pe > 0 ? pe : null, at: Date.now() } };
+            S.poolDeposits = { ...(S.poolDeposits ?? {}), [dlg.dataset.key]: { qtyA: qa, qtyB: qb, collectedUsd: col > 0 ? col : 0, priceEntry: pe > 0 ? pe : null, start: $('#depStart').value || null, at: Date.now() } };
             store.commit('pools');
             dlg.close();
             toast('Depósito salvo. A comparação aparece no cartão da pool.', 'up');
@@ -582,6 +585,7 @@ App.views = App.views || {};
                     <p class="muted small">${m.walletName} · posição ${String(m.positionId).length > 12 ? short(String(m.positionId)) : `#${m.positionId}`} · ${last ? `atualizado às ${fmt.time(new Date(last.t))}` : 'lendo…'} · atualiza sozinho a cada 5 minutos</p>
                 </div>
                 <p class="rp-take"><strong class="delta-${take[0]}">${take[1]}</strong> ${take[2]}</p>
+                ${raw(reviewLine(dep, m))}
             </section>
             <div class="rp-kpis">
                 <div class="panel"><span class="pf-label">Valor da posição</span><strong class="rp-big">${usd(valueB)}</strong><span class="muted small">${fmt.qty(m.qtyA)} ${m.a} + ${fmt.qty(m.qtyB)} ${m.b}</span></div>
@@ -589,6 +593,7 @@ App.views = App.views || {};
                 <div class="panel"><span class="pf-label">Contra só segurar</span><strong class="rp-big delta-${toneOf(res)}">${res === null ? '—' : sUsd(res)}</strong><span class="muted small">${raw(res === null ? html`<button class="link-btn" type="button" data-dep="${m.key}">informe o depósito inicial</button>` : html`${fmt.pct((valueB + feesB) / holdB * 100 - 100, 2)} contra segurar`)}</span></div>
                 <div class="panel"><span class="pf-label">Contra ter ficado em dólar</span><strong class="rp-big delta-${toneOf(vsUsd)}">${vsUsd === null ? '—' : sUsd(vsUsd)}</strong><span class="muted small">${vsUsd === null ? 'informe o preço de entrada no depósito' : `${fmt.pct((valueB + feesB) / depB * 100 - 100, 2)} sobre o depositado`}</span></div>
             </div>
+            <div id="rpMethod"></div>
             <section class="panel">
                 <h3 class="panel-title">Onde o preço está na faixa</h3>
                 <div class="rp-range">${raw(rangeSvg(m, status))}</div>
@@ -621,8 +626,68 @@ App.views = App.views || {};
                 <div id="rpChart" class="rp-chart"></div>
                 <p class="footnote">${hist.length} leitura(s) guardadas neste navegador, desde ${first ? fmt.date(new Date(first.t).toISOString().slice(0, 10)) : '—'}. O painel guarda um ponto a cada 10 minutos enquanto estiver aberto.</p>
             </section>`;
+        renderMethod(m, hist, dep, usdB);
         renderReportChart(m, hist, dep, usdB);
         renderExpectation(m, valueB, ratePerDayB, aprReal, usd);
+    }
+
+    const ZONE = { green: ['🟢', 'Verde', 'up'], yellow: ['🟡', 'Amarelo', 'warn'], red: ['🔴', 'Vermelho', 'down'] };
+
+    function methodFor(m, dep) {
+        const hist = (S.poolHistory?.[m.key] ?? []).map((h) => histPoint(m, h)).filter((h) => Number.isFinite(h.price));
+        const tvl = poolStatsCache.get(`${m.chain}:${m.poolAddress}`)?.value?.tvl ?? null;
+        return App.method.evaluate({ m, hist, dep, tvlUsd: tvl });
+    }
+
+    // Painel "Regras do método": semáforo, tempo na cor, ação do dia, checklist e remontagem sugerida.
+    function methodBadge(m) {
+        const r = methodFor(m, S.poolDeposits?.[m.key] ?? null);
+        const z = ZONE[r.zone];
+        return html`<p class="pl-method"><span>${z[0]} ${z[1]} há ${App.method.duration(r.inZone)}</span><strong>${r.action.text}</strong></p>`;
+    }
+
+    function renderMethod(m, hist, dep, usdB) {
+        const el = $('#rpMethod', root);
+        if (!el) return;
+        const r = methodFor(m, dep);
+        const z = ZONE[r.zone];
+        const usd = (vB) => (usdB ? fmt.money(vB * usdB, 'USD', 2) : `${fmt.qty(vB)} ${m.b}`);
+        const sug = r.suggestion;
+        el.innerHTML = html`<section class="panel rp-method rp-method-${r.action.level}">
+            <div class="panel-bar"><h3 class="panel-title">Regras do método</h3><span class="muted small">faixa de ±${fmt.number(r.profile, 1)}% · perfil ${r.profile <= 8 ? 'ativo (olhar todo dia)' : 'tranquilo (olhar 1 vez por semana)'}</span></div>
+            <div class="rp-sem">
+                <span class="rp-sem-light">${z[0]}</span>
+                <div><strong class="delta-${z[2]}">${z[1]}</strong> · ${fmt.number(Math.max(-99, Math.min(199, r.pos * 100)), 0)}% da faixa · há ${App.method.duration(r.inZone)}</div>
+            </div>
+            <p class="rp-action"><span class="pf-label">Ação de hoje</span><strong>${r.action.text}</strong></p>
+            <ul class="rp-checks">${raw(r.checks.map((c) => html`<li class="${c.ok === null ? 'is-na' : c.ok ? 'is-ok' : c.warn ? 'is-warn' : 'is-bad'}">${c.ok === null ? '·' : c.ok ? '✓' : c.warn ? '!' : '✗'} ${c.text}${c.ok === null ? ' (aguardando dados)' : ''}</li>`).join(''))}</ul>
+            ${raw(sug ? html`<div class="rp-sug">
+                <p class="pf-label">${r.action.level === 'act' ? 'Remontagem pelas regras, com o preço de agora' : 'Se precisar remontar, com o preço de agora'}${sug.widened ? ' (faixa 50% mais larga)' : ''}</p>
+                <div class="table-wrap"><table class="data-table"><thead><tr><th>Parte</th><th>Faixa</th><th class="col-num">Depositar</th></tr></thead><tbody>
+                    <tr><td>Metade centrada (±${fmt.number(sug.halfPct, 1)}%)</td><td>${px2(sug.centered.lower, m.b)} – ${px2(sug.centered.upper, m.b)}</td><td class="col-num">${fmt.qty(sug.centered.qtyA)} ${m.a} + ${fmt.qty(sug.centered.qtyB)} ${m.b}</td></tr>
+                    <tr><td>Metade ${sug.oneSide.note}</td><td>${px2(sug.oneSide.lower, m.b)} – ${px2(sug.oneSide.upper, m.b)}</td><td class="col-num">${sug.oneSide.qtyA ? `${fmt.qty(sug.oneSide.qtyA)} ${m.a}` : `${fmt.qty(sug.oneSide.qtyB)} ${m.b}`}</td></tr>
+                </tbody></table></div>
+                <p class="footnote">Troca necessária: ~${usd(sug.swap.amountB)} de ${sug.swap.from} para ${sug.swap.to}, só para a parte centrada. As quantidades mudam com o preço: confira na hora de montar.</p>
+            </div>` : '')}
+        </section>`;
+    }
+
+    // Data de montagem, idade da posição e próxima revisão semanal (mesmo dia da semana da montagem).
+    function reviewLine(dep, m) {
+        if (!dep?.start) return html`<p class="muted small"><button class="link-btn" type="button" data-dep="${m.key}">Informe a data de montagem</button> para acompanhar a idade da posição e as revisões semanais.</p>`;
+        const start = new Date(`${dep.start}T12:00:00`);
+        const today = new Date(); today.setHours(12, 0, 0, 0);
+        const days = Math.round((today - start) / 86400000);
+        const next = new Date(start);
+        while (next <= today) next.setDate(next.getDate() + 7);
+        const isToday = days > 0 && days % 7 === 0;
+        // Mesmo dia do mês da montagem (ou o último dia, em meses mais curtos).
+        const monthly = (k) => { const d = new Date(start.getFullYear(), start.getMonth() + k, 1, 12); d.setDate(Math.min(start.getDate(), new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate())); return d; };
+        let k = 1;
+        while (monthly(k) <= today) k += 1;
+        const month = monthly(k);
+        const fmtD = (d) => new Intl.DateTimeFormat('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' }).format(d);
+        return html`<p class="rp-review"><span>Montada em <strong>${fmt.date(dep.start)}</strong> · ${days} dia(s)</span><span>${raw(isToday ? html`<strong class="delta-warn">Dia de revisão semanal hoje</strong>` : html`Próxima revisão semanal: <strong>${fmtD(next)}</strong>`)}</span><span>Revisão do mês: <strong>${fmtD(month)}</strong></span></p>`;
     }
 
     // Barra da faixa em HTML (o texto não muda de tamanho com a largura da tela).

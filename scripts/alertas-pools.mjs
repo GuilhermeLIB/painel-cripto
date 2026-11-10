@@ -324,6 +324,33 @@ const money = (v) => `US$ ${num(v, 2)}`;
 const smoney = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}US$ ${num(Math.abs(v), 2)}`;
 const spct = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${num(Math.abs(v), 2)}%`;
 
+function methodLines(p, st, dep) {
+    const HOUR = 3600000, DAY = 24 * HOUR, now = Date.now();
+    const light = { green: '🟢 Verde', yellow: '🟡 Amarelo', red: '🔴 Vermelho' }[st.zone] ?? '';
+    const inZone = now - (st.zoneSince ?? now);
+    const dur = inZone < HOUR ? 'menos de 1 h' : inZone < 2 * DAY ? `${Math.floor(inZone / HOUR)} h` : `${Math.floor(inZone / DAY)} dias`;
+    const age = dep?.start ? now - Date.parse(`${dep.start}T12:00:00-03:00`) : now - (st.firstSeen ?? now);
+    const side = p.frac < 0.5 ? 'baixo' : 'cima';
+    const twice = ['baixo', 'cima'].some((sd) => (st.exits ?? []).filter((e) => e.side === sd).length >= 2);
+    const when = (t) => new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).format(new Date(t));
+    let action;
+    let act = false;
+    if (age < DAY) action = 'recém-montada, não mexer nas primeiras 24 h';
+    else if (st.zone === 'green') action = 'nada a fazer';
+    else if (st.zone === 'yellow') action = inZone < 3 * DAY ? `perto da borda de ${side}; recentralizar se continuar até ${when(st.zoneSince + 3 * DAY)}` : (act = true, '<b>recentralizar</b> (mais de 3 dias perto da borda)');
+    else action = inZone < DAY ? `fora por ${side}; remontar se continuar fora até ${when(st.zoneSince + DAY)}` : (act = true, '<b>remontar</b> (fora há mais de 24 h)');
+    if (act && twice) action += '; saiu 2 vezes para o mesmo lado na semana: faixa 50% mais larga';
+    const lines = [`${light} há ${dur} · Ação: ${action}`];
+    if (act && p.qtyA !== null) {
+        const w = Math.log(p.upper / p.lower) / 2 * (twice ? 1.5 : 1);
+        const lo = p.price * Math.exp(-w), hi = p.price * Math.exp(w);
+        const moreA = p.qtyA * p.price > p.qtyB;
+        const one = moreA ? `só ${esc(p.a)} de ${esc(fmtP(p.price * 1.003, p.pair))} a ${esc(fmtP(hi, p.pair))}` : `só ${esc(p.b)} de ${esc(fmtP(lo, p.pair))} a ${esc(fmtP(p.price * 0.997, p.pair))}`;
+        lines.push(`Sugestão: metade centrada ${esc(fmtP(lo, p.pair))} – ${esc(fmtP(hi, p.pair))} + metade ${one}`);
+    }
+    return lines;
+}
+
 async function hourlyReport(items, next) {
     const hora = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' }).format(new Date());
     const blocks = [];
@@ -337,6 +364,7 @@ async function hourlyReport(items, next) {
             `Preço ${esc(fmtP(p.price, p.pair))} · ${num(Math.max(-99, Math.min(199, p.frac * 100)), 0)}% da faixa (${where})`,
             `Faixa ${esc(fmtP(p.lower, p.pair))} – ${esc(fmtP(p.upper, p.pair))}`,
         ];
+        lines.push(...methodLines(p, next[p.key] ?? {}, DEPOSITS[p.depKey]));
         if (p.qtyA !== null) {
             const valueB = p.qtyA * p.price + p.qtyB;
             const st = next[p.key] ?? {};
@@ -350,6 +378,10 @@ async function hourlyReport(items, next) {
                 if (h > 0.2) { rate = (st.feesB - st.prevFeesB) / h; feeLine += ` (${sfmtB(st.feesB - st.prevFeesB)} desde a última verificação)`; }
             }
             lines.push(feeLine);
+            if (dep?.start) {
+                const days = Math.round((Date.now() - Date.parse(`${dep.start}T12:00:00-03:00`)) / 86400000);
+                lines.push(`Montada em ${dep.start.split('-').reverse().join('/')} · dia ${days}${days > 0 && days % 7 === 0 ? ' · <b>dia de revisão</b>' : ''}`);
+            }
             if (dep && Number.isFinite(dep.a) && Number.isFinite(dep.b)) {
                 const holdB = dep.a * p.price + dep.b;
                 lines.push(`Contra só segurar: <b>${sfmtB(valueB + feesB - holdB)}</b> (${spct((valueB + feesB) / holdB * 100 - 100)})`);
@@ -401,7 +433,13 @@ async function main() {
                 notifiedAt = now;
             }
             const feesB = p.qtyA !== null ? (p.feeA ?? 0) * p.price + (p.feeB ?? 0) : null;
-            next[p.key] = { status: p.status, notifiedAt, since: changed ? now : (before?.since ?? now), feesB, feesAt: now, prevFeesB: before?.feesB ?? null, prevFeesAt: before?.feesAt ?? null };
+            // Semáforo do método: cor atual, desde quando e saídas da faixa na última semana.
+            const zone = p.frac < 0 || p.frac > 1 ? 'red' : p.frac < 0.2 || p.frac > 0.8 ? 'yellow' : 'green';
+            const zoneSince = before?.zone === zone ? (before.zoneSince ?? now) : now;
+            const exits = (before?.exits ?? []).filter((e) => now - e.at < 7 * 86400000);
+            if (zone === 'red' && before?.zone && before.zone !== 'red') exits.push({ side: p.frac < 0 ? 'baixo' : 'cima', at: now });
+            const firstSeen = before?.firstSeen ?? now;
+            next[p.key] = { status: p.status, notifiedAt, since: changed ? now : (before?.since ?? now), feesB, feesAt: now, prevFeesB: before?.feesB ?? null, prevFeesAt: before?.feesAt ?? null, zone, zoneSince, exits, firstSeen };
             summary.push(`${p.pair} (${p.chainName} · ${p.dex}): ${{ ok: 'na faixa', borda: 'perto da borda', fora: 'fora da faixa' }[p.status]}`);
         }
     };

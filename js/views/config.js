@@ -33,7 +33,7 @@ App.views = App.views || {};
             const m = key.match(/^chain:([^:]+):(.+):([^:]+)$/);
             if (!m) return;
             const slug = m[2].toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-            out[`${m[1]}:${slug}:${m[3]}`] = { a: d.qtyA, b: d.qtyB, ...(d.priceEntry ? { price: d.priceEntry } : {}), ...(d.collectedUsd ? { collected: d.collectedUsd } : {}) };
+            out[`${m[1]}:${slug}:${m[3]}`] = { a: d.qtyA, b: d.qtyB, ...(d.priceEntry ? { price: d.priceEntry } : {}), ...(d.collectedUsd ? { collected: d.collectedUsd } : {}), ...(d.start ? { start: d.start } : {}) };
         });
         return Object.keys(out).length ? JSON.stringify(out) : '';
     }
